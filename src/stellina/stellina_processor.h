@@ -1,6 +1,6 @@
 /*
  * stellina_processor.h
- * Stellina processing extension for Siril
+ * Stellina processing extension for Siril - Fixed header
  */
 
 #ifndef STELLINA_PROCESSOR_H
@@ -21,14 +21,10 @@
 // Siril includes (now that we have GTK)
 #include "core/siril.h"
 #include "core/proto.h"
-#include "core/command.h"
 #include "io/single_image.h"
 #include "io/fits_keywords.h"
 #include "registration/registration.h"
 #endif
-
-// Forward declarations
-struct command_info;
 
 // Stellina metadata structure (C-compatible)
 struct stellina_metadata {
@@ -76,6 +72,7 @@ int stellina_process_single_image(const char *fits_path, const char *json_path, 
 
 // Utility functions
 struct stellina_metadata *stellina_parse_json(const char *json_path);
+struct stellina_metadata *stellina_parse_json_enhanced(const char *json_path);
 int stellina_convert_altaz_to_radec(double alt, double az, const char *date_obs, 
                                    double observer_lat, double observer_lon, double observer_alt,
                                    double *ra, double *dec);
@@ -85,12 +82,9 @@ gboolean stellina_check_quality(const struct stellina_metadata *metadata);
 // Only declare this in C++ mode since 'fits' type needs C++ includes
 int stellina_add_coordinates_to_header(fits *fit, const struct stellina_metadata *metadata, 
                                       double ra, double dec);
+int stellina_add_coordinates_to_header_enhanced(fits *fit, const struct stellina_metadata *metadata, 
+                                              double ra, double dec);
 #endif
-
-// Siril command interface
-int cmd_process_stellina(struct command_info *cmd);
-int cmd_stellina_config(struct command_info *cmd);
-int cmd_stellina_stats(struct command_info *cmd);
 
 // Memory management
 void stellina_metadata_free(struct stellina_metadata *metadata);
@@ -103,6 +97,15 @@ void stellina_set_progress_callback(stellina_progress_callback callback);
 // Helper functions
 void stellina_set_default_observer_location(struct stellina_config *config);
 gboolean stellina_validate_observer_location(double lat, double lon, double alt);
+
+// Coordinate utility functions from stellina_coordinates.cpp
+int stellina_convert_altaz_to_radec_corrected(double alt, double az, const char *date_obs,
+                                             double observer_lat, double observer_lon, double observer_alt,
+                                             double temperature, double pressure,
+                                             double *ra, double *dec);
+double stellina_get_local_sidereal_time(const char *date_obs, double observer_lon);
+int stellina_get_solar_object_coords(const char *date_obs, double observer_lat, double observer_lon,
+                                   const char *object_name, double *ra, double *dec);
 
 #ifdef __cplusplus
 }
