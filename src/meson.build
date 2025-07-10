@@ -307,8 +307,11 @@ siril_lib = static_library('siril',
                            c_args : siril_c_flag,
                            cpp_args : siril_cpp_flag)
 
+# Add stellina subdirectory
+subdir('stellina')
+
 siril_dep = declare_dependency(link_with: siril_lib,
-                               dependencies: externals_dep,
+                               dependencies: [externals_dep, stellina_dep],
                                include_directories: siril_inc_dir)
 
 # Custom target for glib-compile-resources
