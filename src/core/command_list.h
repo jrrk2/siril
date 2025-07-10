@@ -283,10 +283,10 @@ static command commands[] = {
 	{"wiener", 0, "wiener [-loadpsf=] [-alpha=]", process_wiener, STR_WIENER, TRUE, REQ_CMD_SINGLE_IMAGE},
 	/* reconstruct from wavelet transform and weighs plans with c1, c2, c3... */
 	{"wrecons", 2, "wrecons c1 c2 c3 ...", process_wrecons, STR_WRECONS, TRUE, REQ_CMD_SINGLE_IMAGE},
-	// Add to the command_list array
-	{"process_stellina", cmd_process_stellina, "process_stellina input_dir output_dir [options]"},
-	{"stellina_config", cmd_stellina_config, "stellina_config option value"}, 
-	{"stellina_stats", cmd_stellina_stats, "stellina_stats"},
+	// Add stellina commands to the command_list array
+	{"process_stellina", 2, "process_stellina input_dir output_dir [options]", cmd_process_stellina, STR_PROCESS, TRUE, REQ_CMD_NONE},
+	{"stellina_config", 2, "stellina_config option value", cmd_stellina_config, STR_CONFIG, TRUE, REQ_CMD_NONE}, 
+	{"stellina_stats", 0, "stellina_stats", cmd_stellina_stats, STR_STATS, TRUE, REQ_CMD_NONE},
 	EXTRA_COMMANDS
 	
 	{"",0,"",0, STR_NONE, FALSE, REQ_CMD_NONE}

@@ -1,43 +1,46 @@
 /*
  * stellina_processor.h
  * Stellina processing extension for Siril
- * Integrates directly with Siril's command system and image processing pipeline
  */
 
 #ifndef STELLINA_PROCESSOR_H
 #define STELLINA_PROCESSOR_H
 
-// C includes first
+// C includes
+#include <glib.h>
+#include <json-glib/json-glib.h>
+
+// C++ includes (only when compiling as C++)
+#ifdef __cplusplus
+#include <string>
+#include <vector>
+#include <memory>
+#include <functional>
+#include <libnova/libnova.h>
+
+// Siril includes (now that we have GTK)
 #include "core/siril.h"
 #include "core/proto.h"
 #include "core/command.h"
 #include "io/single_image.h"
 #include "io/fits_keywords.h"
 #include "registration/registration.h"
-
-// Check if astrometry header exists, if not skip it
-#ifdef HAVE_ASTROMETRY
-#include "astrometry/platesolve.h"
 #endif
 
-// C++ includes  
-#include <string>
-#include <vector>
-#include <memory>
-#include <functional>
-#include <json-glib/json-glib.h>
+// Forward declarations
+struct command_info;
 
-// Stellina metadata structure
+// Stellina metadata structure (C-compatible)
 struct stellina_metadata {
     double altitude;
     double azimuth;
-    char date_obs[FLEN_VALUE];
+    char date_obs[256];
     gboolean quality_accepted;
     char quality_reason[256];
     double fwhm;
     int star_count;
     gboolean used_for_stacking;
-    char original_filename[FLEN_FILENAME];
+    char original_filename[256];
 };
 
 // Processing statistics
@@ -77,10 +80,14 @@ int stellina_convert_altaz_to_radec(double alt, double az, const char *date_obs,
                                    double observer_lat, double observer_lon, double observer_alt,
                                    double *ra, double *dec);
 gboolean stellina_check_quality(const struct stellina_metadata *metadata);
+
+#ifdef __cplusplus
+// Only declare this in C++ mode since 'fits' type needs C++ includes
 int stellina_add_coordinates_to_header(fits *fit, const struct stellina_metadata *metadata, 
                                       double ra, double dec);
+#endif
 
-// Siril command interface - these must have C linkage
+// Siril command interface
 int cmd_process_stellina(struct command_info *cmd);
 int cmd_stellina_config(struct command_info *cmd);
 int cmd_stellina_stats(struct command_info *cmd);

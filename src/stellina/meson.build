@@ -17,9 +17,12 @@ libnova_dep = declare_dependency(
   dependencies: libnova_lib
 )
 
+# Use the same dependencies as the main Siril build
 stellina_deps = [
   cc.find_library('m', required: false),
   dependency('json-glib-1.0', required: true),
+  dependency('glib-2.0', required: true),
+  dependency('gtk+-3.0', required: true),  # Add GTK dependency
   libnova_dep,
   cfitsio_dep,
   gsl_dep
@@ -34,7 +37,7 @@ libstellina = static_library(
   install: false
 )
 
-# Add to main Siril dependencies
+# Export the dependency for use in main siril executable
 stellina_dep = declare_dependency(
   link_with: libstellina,
   include_directories: include_directories('.'),

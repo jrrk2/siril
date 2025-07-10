@@ -6,6 +6,7 @@
 
 #include "stellina_processor.h"
 #include "core/siril.h"
+#include "core/siril_log.h"
 #include "core/proto.h"
 #include "gui/utils.h"
 #include <libnova/libnova.h>
