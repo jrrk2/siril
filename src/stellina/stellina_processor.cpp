@@ -176,6 +176,48 @@ std::vector<std::pair<std::string, std::string>> find_matching_files(const std::
 }
 
 /**
+ * Extract DATE-OBS from FITS header
+ */
+bool extract_date_from_fits(const char* fits_path, char* date_obs, size_t date_obs_size) {
+    if (!fits_path || !date_obs || date_obs_size == 0) {
+        return false;
+    }
+    
+    // Initialize output
+    date_obs[0] = '\0';
+    
+    // Open FITS file
+    fitsfile* fptr = nullptr;
+    int status = 0;
+    
+    if (fits_open_file(&fptr, fits_path, READONLY, &status) != 0) {
+        char err_text[FLEN_ERRMSG];
+        fits_get_errstatus(status, err_text);
+        siril_log_color_message("FITS open error: %s\n", "red", err_text);
+        return false;
+    }
+    
+    // Read DATE-OBS
+    char date_value[256] = {0};
+    status = 0;
+    
+    if (fits_read_key_str(fptr, "DATE-OBS", date_value, nullptr, &status) != 0) {
+        siril_log_color_message("DATE-OBS not found in FITS header\n", "red");
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    // Copy value
+    g_strlcpy(date_obs, date_value, date_obs_size);
+    
+    // Close file
+    fits_close_file(fptr, &status);
+    
+    siril_debug_print("Extracted DATE-OBS from FITS: %s\n", date_obs);
+    return true;
+}
+
+/**
  * Enhanced JSON parsing with better error handling
  */
 struct stellina_metadata *stellina_parse_json_enhanced(const char *json_path) {
@@ -280,6 +322,9 @@ struct stellina_metadata *stellina_parse_json_enhanced(const char *json_path) {
     
     if (date_str) {
         g_strlcpy(metadata->date_obs, date_str, sizeof(metadata->date_obs));
+    } else {
+        // Default to empty string
+        metadata->date_obs[0] = '\0';
     }
     
     // Extract quality information
@@ -514,10 +559,26 @@ int stellina_process_single_image(const char *fits_path, const char *json_path,
         return 1; // Skipped
     }
     
+    // If date is not in JSON, try to get it from FITS header
+    char date_obs[256];
+    if (metadata->date_obs[0] == '\0') {
+        siril_log_message("No DATE-OBS in JSON, reading from FITS header\n");
+        if (extract_date_from_fits(fits_path, date_obs, sizeof(date_obs))) {
+            siril_log_message("Using DATE-OBS from FITS: %s\n", date_obs);
+        } else {
+            siril_log_color_message("Failed to extract DATE-OBS from FITS\n", "red");
+            stellina_metadata_free(metadata);
+            return -1;
+        }
+    } else {
+        // Use date from metadata
+        g_strlcpy(date_obs, metadata->date_obs, sizeof(date_obs));
+    }
+    
     // Convert Alt/Az to RA/Dec
     double ra, dec;
     int coord_result = stellina_convert_altaz_to_radec(
-        metadata->altitude, metadata->azimuth, metadata->date_obs,
+        metadata->altitude, metadata->azimuth, date_obs,
         config->observer_latitude, config->observer_longitude, config->observer_altitude,
         &ra, &dec
     );
