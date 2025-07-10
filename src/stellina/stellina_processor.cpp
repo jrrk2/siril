@@ -131,6 +131,7 @@ void close_fits_file(fits* fit) {
 
 /**
  * Find matching FITS and JSON files in directory
+ * Modified to handle Stellina's specific naming pattern
  */
 std::vector<std::pair<std::string, std::string>> find_matching_files(const std::string& directory) {
     std::vector<std::pair<std::string, std::string>> matches;
@@ -142,20 +143,26 @@ std::vector<std::pair<std::string, std::string>> find_matching_files(const std::
             std::string path = entry.path().string();
             std::string filename = entry.path().filename().string();
             
-            // Look for FITS files - use our C++17 compatible function
+            // Look for FITS files
             if (string_ends_with(filename, ".fits") || string_ends_with(filename, ".fit")) {
-                // Generate corresponding JSON filename
-                std::string json_path = path;
-                size_t dot_pos = json_path.find_last_of('.');
-                if (dot_pos != std::string::npos) {
-                    json_path = json_path.substr(0, dot_pos) + ".json";
-                    
-                    // Check if JSON file exists
-                    if (std::filesystem::exists(json_path)) {
-                        matches.emplace_back(json_path, path);
-                        siril_debug_print("Found matching pair: %s <-> %s\n", 
-                                        json_path.c_str(), path.c_str());
-                    }
+                // Extract base pattern (e.g., "img-0001" from "img-0001.fits")
+                std::string base_name = filename.substr(0, filename.find_last_of('.'));
+                
+                // Generate corresponding JSON filename patterns
+                std::string stacking_json_path = directory + "/" + base_name + "-stacking.json";
+                std::string output_json_path = directory + "/" + base_name + "-output.json";
+                
+                // Check for stacking JSON first (preferred)
+                if (std::filesystem::exists(stacking_json_path)) {
+                    matches.emplace_back(stacking_json_path, path);
+                    siril_debug_print("Found matching pair: %s <-> %s\n", 
+                                    stacking_json_path.c_str(), path.c_str());
+                }
+                // Fall back to output JSON if stacking not found
+                else if (std::filesystem::exists(output_json_path)) {
+                    matches.emplace_back(output_json_path, path);
+                    siril_debug_print("Found matching pair: %s <-> %s\n", 
+                                    output_json_path.c_str(), path.c_str());
                 }
             }
         }
@@ -216,6 +223,22 @@ struct stellina_metadata *stellina_parse_json_enhanced(const char *json_path) {
         metadata->altitude = json_object_get_double_member(root_object, "alt");
     } else if (json_object_has_member(root_object, "Alt")) {
         metadata->altitude = json_object_get_double_member(root_object, "Alt");
+    } else if (json_object_has_member(root_object, "motors") && 
+               JSON_NODE_HOLDS_OBJECT(json_object_get_member(root_object, "motors"))) {
+        JsonObject *motors = json_object_get_object_member(root_object, "motors");
+        if (json_object_has_member(motors, "ALT")) {
+            metadata->altitude = json_object_get_double_member(motors, "ALT");
+        }
+    } else if (json_object_has_member(root_object, "telescope") && 
+               JSON_NODE_HOLDS_OBJECT(json_object_get_member(root_object, "telescope"))) {
+        JsonObject *telescope = json_object_get_object_member(root_object, "telescope");
+        if (json_object_has_member(telescope, "motors") && 
+            JSON_NODE_HOLDS_OBJECT(json_object_get_member(telescope, "motors"))) {
+            JsonObject *motors = json_object_get_object_member(telescope, "motors");
+            if (json_object_has_member(motors, "ALT")) {
+                metadata->altitude = json_object_get_double_member(motors, "ALT");
+            }
+        }
     }
     
     // Extract azimuth (try multiple field names)
@@ -225,6 +248,22 @@ struct stellina_metadata *stellina_parse_json_enhanced(const char *json_path) {
         metadata->azimuth = json_object_get_double_member(root_object, "az");
     } else if (json_object_has_member(root_object, "Az")) {
         metadata->azimuth = json_object_get_double_member(root_object, "Az");
+    } else if (json_object_has_member(root_object, "motors") && 
+               JSON_NODE_HOLDS_OBJECT(json_object_get_member(root_object, "motors"))) {
+        JsonObject *motors = json_object_get_object_member(root_object, "motors");
+        if (json_object_has_member(motors, "AZ")) {
+            metadata->azimuth = json_object_get_double_member(motors, "AZ");
+        }
+    } else if (json_object_has_member(root_object, "telescope") && 
+               JSON_NODE_HOLDS_OBJECT(json_object_get_member(root_object, "telescope"))) {
+        JsonObject *telescope = json_object_get_object_member(root_object, "telescope");
+        if (json_object_has_member(telescope, "motors") && 
+            JSON_NODE_HOLDS_OBJECT(json_object_get_member(telescope, "motors"))) {
+            JsonObject *motors = json_object_get_object_member(telescope, "motors");
+            if (json_object_has_member(motors, "AZ")) {
+                metadata->azimuth = json_object_get_double_member(motors, "AZ");
+            }
+        }
     }
     
     // Extract observation time (try multiple field names)
