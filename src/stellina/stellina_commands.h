@@ -20,9 +20,12 @@ int cmd_process_stellina(int nb);
 int cmd_stellina_config(int nb);
 int cmd_stellina_stats(int nb);
 int cmd_stellina_test_coords(int nb);
+int cmd_stellina_platesolve(int nb);
 
 // Initialization function
 void stellina_commands_init(void);
+
+#include "core/siril_world_cs.h" // For coordinate system functions
 
 #ifdef __cplusplus
 }
@@ -33,6 +36,7 @@ void stellina_commands_init(void);
 #define STR_STELLINA_CONFIG N_("Configure Stellina processing parameters")
 #define STR_STELLINA_STATS N_("Show Stellina statistics and analyze files")
 #define STR_STELLINA_TEST_COORDS N_("Test coordinate conversion (debugging)")
+#define STR_STELLINA_PLATESOLVE N_("Stellina specific platesolve")
 
 // Command help strings
 #define HELP_PROCESS_STELLINA N_(\
@@ -79,5 +83,9 @@ void stellina_commands_init(void);
 "  date_obs: Observation time (ISO format: 2024-01-09T22:13:29)\n" \
 "  lat, lon, alt_m: Observer location (optional)\n\n" \
 "Example: stellina_test_coords 45.5 180.0 2024-01-09T22:13:29")
+
+#define HELP_STELLINA_PLATESOLVE N_(\
+"stellina_platesolve [fits_file]\n\n" \
+"Example: stellina_platesolve image.fits")
 
 #endif // STELLINA_COMMANDS_H

@@ -62,6 +62,13 @@ struct stellina_config {
     char output_prefix[64];
 };
 
+extern "C" {
+#include "algos/astrometry_solver.h" // For plate solving
+#include "core/siril_world_cs.h" // For coordinate system functions
+};
+
+gchar *stellina_platesolve(fits *preffit, SirilWorldCS *target_coords, double forced_focal, double forced_pixsize);
+
 #ifdef __cplusplus
 extern "C" {
 #endif

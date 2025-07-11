@@ -3,11 +3,7 @@
  * Final fixed Stellina processing implementation using CFITSIO directly
  */
 
-#include "stellina_processor.h"
-#include "core/siril.h"
-#include "core/siril_log.h"
-#include "core/proto.h"
-#include "gui/utils.h"
+/* correct ordering critical */
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -16,6 +12,17 @@
 #include <regex>
 #include <cmath>
 #include <fitsio.h>
+#include "core/siril.h"
+
+extern "C" {
+#include "io/single_image.h"
+};
+
+#include "stellina_processor.h"
+#include "core/siril_log.h"
+#include "core/proto.h"
+#include "gui/utils.h"
+#include "io/siril_catalogues.h"
 
 static stellina_progress_callback g_progress_callback = nullptr;
 
@@ -172,6 +179,7 @@ std::vector<std::pair<std::string, std::string>> find_matching_files(const std::
     }
     
     siril_log_message("Found %zu matching FITS/JSON pairs\n", matches.size());
+    std::sort(matches.begin(), matches.end());
     return matches;
 }
 
@@ -455,6 +463,47 @@ int stellina_add_coordinates_to_header_enhanced(fits *fit, const struct stellina
 }
 
 /**
+ * Plate solve using Siril's astrometry_solver system
+ * This provides proper WCS coordinates
+ */
+bool stellina_plate_solve(fits *fit, double ra_hint, double dec_hint, double search_radius = 2.0) {
+    if (!fit || !fit->fptr) {
+        siril_log_color_message("Invalid FITS data for plate solving\n", "red");
+        return false;
+    }
+    
+    siril_log_message("Starting plate solving with RA=%.4f°, Dec=%.4f°, radius=%.1f°\n", 
+                     ra_hint, dec_hint, search_radius);
+
+    SirilWorldCS *target_coords = siril_world_cs_new_from_a_d(ra_hint, dec_hint);
+    double forced_focal = 400.0;
+    double forced_pixsize = 2.4;
+    gchar *err_msg = stellina_platesolve(fit, target_coords, forced_focal, forced_pixsize);
+    
+    // Check result
+    bool success = (*err_msg == 0);
+    
+    if (success) {
+        siril_log_color_message("Plate solving succeeded!\n", "green");
+        
+        // Update FITS data with WCS information
+        update_wcsdata_from_wcs(fit);
+        
+        // Free resources
+        // free_astrometry_data(args);
+        return true;
+    } else {
+        // Get error message
+        siril_log_color_message("Plate solving failed: %s\n", "yellow", err_msg ? err_msg : "Unknown error");
+        g_free(err_msg);
+        
+        // Free resources
+        // free_astrometry_data(args);
+        return false;
+    }
+}
+
+/**
  * Complete directory processing implementation
  */
 int stellina_process_directory(const char *input_dir, const char *output_dir, 
@@ -575,7 +624,7 @@ int stellina_process_single_image(const char *fits_path, const char *json_path,
         g_strlcpy(date_obs, metadata->date_obs, sizeof(date_obs));
     }
     
-    // Convert Alt/Az to RA/Dec
+    // Convert Alt/Az to RA/Dec for initial coordinates
     double ra, dec;
     int coord_result = stellina_convert_altaz_to_radec(
         metadata->altitude, metadata->azimuth, date_obs,
@@ -589,7 +638,7 @@ int stellina_process_single_image(const char *fits_path, const char *json_path,
         return -1;
     }
     
-    // Load FITS file using our direct CFITSIO wrapper
+    // Load FITS file
     fits fit = { 0 };
     if (load_fits_file(fits_path, &fit) != 0) {
         siril_log_color_message("Failed to load FITS file: %s\n", "red", fits_path);
@@ -597,7 +646,7 @@ int stellina_process_single_image(const char *fits_path, const char *json_path,
         return -1;
     }
     
-    // Add coordinates to header
+    // Add initial coordinates to header
     if (config->add_coordinate_keywords) {
         if (stellina_add_coordinates_to_header_enhanced(&fit, metadata, ra, dec) != 0) {
             siril_log_color_message("Failed to add coordinates to header: %s\n", "red", fits_path);
@@ -605,6 +654,42 @@ int stellina_process_single_image(const char *fits_path, const char *json_path,
             stellina_metadata_free(metadata);
             return -1;
         }
+    }
+    
+    // Plate solve using calculated coordinates as hints
+    bool plate_solved = false;
+    if (config->platesolve_fallback_enabled) {
+        siril_log_message("Attempting plate solving with RA=%.4f°, Dec=%.4f°\n", ra, dec);
+        
+        // Read the telescope parameters from FITS header if possible
+        double pixel_size = 2.4;  // Default Stellina pixel size in µm
+        double focal_length = 400.0;  // Default Stellina focal length in mm
+        
+        // Try to extract PIXSZ and FOCAL from the header
+        int status = 0;
+        double temp;
+        
+        if (fits_read_key(fit.fptr, TDOUBLE, "PIXSZ", &temp, NULL, &status) == 0) {
+            pixel_size = temp;
+        }
+        status = 0;
+        if (fits_read_key(fit.fptr, TDOUBLE, "FOCAL", &temp, NULL, &status) == 0) {
+            focal_length = temp;
+        }
+        
+        siril_log_message("Using pixel size=%.2f µm, focal length=%.1f mm\n", 
+                         pixel_size, focal_length);
+        
+        // Now run the plate solving
+        plate_solved = stellina_plate_solve(&fit, ra, dec, 2.0);
+        
+        if (plate_solved) {
+            siril_log_color_message("Plate solving successful, WCS added to image\n", "green");
+        } else {
+            siril_log_color_message("Plate solving failed, using calculated coordinates\n", "yellow");
+        }
+    } else {
+        siril_log_message("Plate solving disabled, using calculated coordinates only\n");
     }
     
     // Save to output path
@@ -618,6 +703,9 @@ int stellina_process_single_image(const char *fits_path, const char *json_path,
     siril_log_message("Successfully processed %s -> %s\n", fits_path, output_path);
     siril_debug_print("  Coordinates: Alt/Az %.2f°/%.2f° -> RA/Dec %.4f°/%.4f°\n",
                      metadata->altitude, metadata->azimuth, ra, dec);
+    if (plate_solved) {
+        siril_log_message("  Full WCS solution included in FITS header\n");
+    }
     
     // Cleanup
     close_fits_file(&fit);
@@ -636,4 +724,198 @@ void stellina_stats_free(struct stellina_stats *stats) {
         stats->error_messages = NULL;
         stats->warning_messages = NULL;
     }
+}
+
+int stellina_open_single_image(const char *f)
+{
+  return open_single_image(f);
+}
+
+// used for platesolve and seqplatesolve commands
+gchar *stellina_platesolve(fits *preffit, SirilWorldCS *target_coords, double forced_focal, double forced_pixsize) {
+	gboolean noflip = FALSE, force = TRUE, downsample = FALSE, autocrop = TRUE,
+		asnet_blind_pos = FALSE, asnet_blind_res = FALSE;
+	gboolean forced_metadata[3] = { 0 }; // used for sequences in the image hook, for center, pixel and focal
+	double mag_offset = 0.0, target_mag = -1.0, searchradius = com.pref.astrometry.radius_degrees;
+	int order = com.pref.astrometry.sip_correction_order; // we default to the pref value
+	siril_cat_index cat = CAT_AUTO;
+	gboolean seqps = 0;
+	sequence *seq = NULL;
+	platesolve_solver solver = SOLVER_SIRIL;
+	gchar *distofilename = NULL;
+	struct astrometry_data *args = NULL;
+	forced_metadata[FORCED_CENTER] = TRUE;
+
+	if (solver == SOLVER_LOCALASNET && !asnet_is_available()) {
+		siril_log_color_message(_("The local astrometry.net solver was not found, aborting. Please check the settings.\n"), "red");
+			if (target_coords)
+				siril_world_cs_unref(target_coords);
+			if (args)
+				free_astrometry_data(args);
+			if (distofilename)
+				g_free(distofilename);
+	}
+
+	if (solver == SOLVER_SIRIL) {
+		if (asnet_blind_pos) {
+			siril_log_color_message(_("Siril internal solver cannot be set blind in %s\n"), "salmon", _("position"));
+			asnet_blind_pos = FALSE;
+		}
+		if (asnet_blind_res) {
+			siril_log_color_message(_("Siril internal solver cannot be set blind in %s\n"), "salmon", _("resolution"));
+			asnet_blind_res = FALSE;
+		}
+	}
+
+	if (!target_coords) {
+		target_coords = get_eqs_from_header(preffit);
+		if (solver != SOLVER_LOCALASNET && !target_coords) {
+			siril_log_color_message(_("Cannot plate solve, no target coordinates passed and image header doesn't contain any either\n"), "red");
+			if (target_coords)
+				siril_world_cs_unref(target_coords);
+			if (args)
+				free_astrometry_data(args);
+			if (distofilename)
+				g_free(distofilename);
+			return 0;
+		}
+		if (target_coords) {
+			siril_log_message(_("Using target coordinate from image header: %f, %f\n"),
+			siril_world_cs_get_alpha(target_coords),
+			siril_world_cs_get_delta(target_coords));
+		} else {
+			asnet_blind_pos = TRUE;
+		}
+	}
+	if (target_coords && asnet_blind_pos) {
+		if (forced_metadata[FORCED_CENTER]) {
+			siril_log_color_message(_("%s is ignored when using local astrometry.net blind in %s\n"), "salmon", _("Center position"), _("position"));
+			forced_metadata[FORCED_CENTER] = FALSE;
+		}
+		siril_world_cs_unref(target_coords);
+		target_coords = NULL;
+	}
+	gboolean iscfa = preffit->keywords.bayer_pattern[0] != '\0';
+
+	// we are now ready to fill the structure
+	args = (struct astrometry_data *)calloc(1, sizeof(struct astrometry_data));
+
+	if (asnet_blind_res) {
+		if (forced_metadata[FORCED_PIXEL]) {
+			siril_log_color_message(_("%s is ignored when using local astrometry.net blind in %s\n"), "salmon", _("Pixel size"), _("resolution"));
+			forced_metadata[FORCED_PIXEL] = FALSE;
+		}
+		args->pixel_size = 0.;
+	} else if (forced_pixsize > 0.0) {
+		args->pixel_size = forced_pixsize;
+		siril_log_message(_("Using provided pixel size: %.2f\n"), args->pixel_size);
+	} else {
+	  args->pixel_size = 2.4;
+	}
+
+	if (asnet_blind_res) {
+		if (forced_metadata[FORCED_FOCAL]) {
+			siril_log_color_message(_("%s is ignored when using local astrometry.net blind in %s\n"), "salmon", _("Focal length"), _("resolution"));
+			forced_metadata[FORCED_FOCAL] = FALSE;
+		}
+		args->focal_length = 0.;
+	} else if (forced_focal > 0.0) {
+		args->focal_length = forced_focal;
+		siril_log_message(_("Using provided focal length: %.2f\n"), args->focal_length);
+	} else {
+		args->focal_length = preffit->keywords.focal_length;
+		if (args->focal_length <= 0.0) {
+			args->focal_length = com.pref.starfinder_conf.focal_length;
+			if (args->focal_length <= 0.0) {
+				siril_log_color_message(_("Focal length not found in image or in settings, cannot proceed\n"), "red");
+			if (target_coords)
+				siril_world_cs_unref(target_coords);
+			if (args)
+				free_astrometry_data(args);
+			if (distofilename)
+				g_free(distofilename);
+			return 0;
+			}
+			siril_log_message(_("Using focal length from preferences: %.2f\n"), args->focal_length);
+		}
+		else siril_log_message(_("Using focal length from image: %.2f\n"), args->focal_length);
+	}
+
+	if (target_mag > -1.0) {
+		if (solver != SOLVER_SIRIL)
+			siril_log_message(_("Magnitude alteration arguments are useless for astrometry.net plate solving\n"));
+		else {
+			args->mag_mode = LIMIT_MAG_ABSOLUTE;
+			args->magnitude_arg = target_mag;
+		}
+	} else if (mag_offset != 0.0) {
+		if (solver != SOLVER_SIRIL)
+			siril_log_message(_("Magnitude alteration arguments are useless for astrometry.net plate solving\n"));
+		else {
+			args->mag_mode = LIMIT_MAG_AUTO_WITH_OFFSET;
+			args->magnitude_arg = mag_offset;
+		}
+	} else {
+		args->mag_mode = LIMIT_MAG_AUTO;
+	}
+
+	args->solver = solver;
+	args->downsample = downsample;
+	args->autocrop = autocrop && solver == SOLVER_SIRIL; // we don't crop fov when using asnet
+	args->nocache = 0;
+	if (!searchradius && solver == SOLVER_LOCALASNET && !asnet_blind_pos) {
+		args->searchradius = com.pref.astrometry.radius_degrees;
+		siril_log_color_message(_("Cannot force null radius for localasnet if not blind solving, using default instead\n"), "red");
+	} else {
+		args->searchradius = searchradius;
+	}
+
+	if (!com.script && com.selection.w > 0 && com.selection.h > 0 && (!seqps || !seq->is_variable)) {
+		args->solvearea = com.selection;
+		args->autocrop = FALSE;
+	}
+
+	if (distofilename) {
+		args->distofilename = distofilename;
+	}
+	args->force = force;
+	memcpy(&args->forced_metadata, forced_metadata, 3 * sizeof(gboolean));
+	if (iscfa) { // prevent flipping for bayered images
+		noflip = TRUE;
+		siril_debug_print("forced no flip for CFA image\n");
+	}
+	args->flip_image = !noflip;
+	args->manual = FALSE;
+	args->trans_order = order;
+	if (target_coords) {
+		args->cat_center = target_coords;
+	}
+	// catalog query parameters
+	if (solver == SOLVER_SIRIL) {
+		args->ref_stars = siril_catalog_new(cat);
+		args->ref_stars->phot = FALSE;
+		args->ref_stars->center_ra = siril_world_cs_get_alpha(target_coords);
+		args->ref_stars->center_dec = siril_world_cs_get_delta(target_coords);
+	} else {
+		args->asnet_blind_pos = asnet_blind_pos;
+		args->asnet_blind_res = asnet_blind_res;
+	}
+
+	args->for_sequence = seqps;
+	args->verbose = !seqps;
+	args->asnet_checked = TRUE;
+	args->fit = preffit;
+	args->numthreads = com.max_thread;
+	process_plate_solver_input(args);
+	if (!start_in_new_thread(plate_solver, args)) {
+	                gchar *err_msg = platesolve_msg(args);
+			if (target_coords)
+				siril_world_cs_unref(target_coords);
+			if (args)
+				free_astrometry_data(args);
+			if (distofilename)
+				g_free(distofilename);
+			return err_msg;
+	}
+	return "";
 }

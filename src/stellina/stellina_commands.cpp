@@ -424,6 +424,24 @@ int cmd_stellina_test_coords(int nb) {
     }
 }
 
+int cmd_stellina_platesolve(int nb) {
+    if (nb < 3) {
+        siril_log_color_message("Usage: stellina_platesolve ra dec\n", "red");
+        siril_log_message("  ra: Guide RA in degrees\n");
+        siril_log_message("  dec: Guide DEC in degrees\n");
+        siril_log_message("Example: stellina_platesolve 10.776 41.238\n");
+        return CMD_ARG_ERROR;
+    }
+
+    fits *preffit = &gfit;
+    SirilWorldCS *target_coords = siril_world_cs_new_from_objct_ra_dec(word[1], word[2]);
+    double forced_focal = 400.0;
+    double forced_pixsize = 2.4;
+    gchar *err_msg = stellina_platesolve(preffit, target_coords, forced_focal, forced_pixsize);
+    puts(err_msg);
+    return CMD_OK;
+}
+
 /**
  * Initialize Stellina extension commands
  */
