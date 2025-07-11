@@ -21,11 +21,22 @@ int cmd_stellina_config(int nb);
 int cmd_stellina_stats(int nb);
 int cmd_stellina_test_coords(int nb);
 int cmd_stellina_platesolve(int nb);
+int cmd_stellina_script(int nb);
 
 // Initialization function
 void stellina_commands_init(void);
 
 #include "core/siril_world_cs.h" // For coordinate system functions
+#include "core/command_line_processor.h"
+#include "core/initfile.h"
+#include "livestacking/livestacking.h"
+#include "gui/registration_preview.h"
+#include "gui/image_interactions.h"
+#include "gui/progress_and_log.h"
+#include "gui/image_display.h"
+#include "gui/script_menu.h"
+#include "gui/callbacks.h"
+#include "gui/utils.h"
 
 #ifdef __cplusplus
 }
@@ -37,6 +48,7 @@ void stellina_commands_init(void);
 #define STR_STELLINA_STATS N_("Show Stellina statistics and analyze files")
 #define STR_STELLINA_TEST_COORDS N_("Test coordinate conversion (debugging)")
 #define STR_STELLINA_PLATESOLVE N_("Stellina specific platesolve")
+#define STR_STELLINA_SCRIPT N_("Stellina specific script")
 
 // Command help strings
 #define HELP_PROCESS_STELLINA N_(\
@@ -87,5 +99,9 @@ void stellina_commands_init(void);
 #define HELP_STELLINA_PLATESOLVE N_(\
 "stellina_platesolve [fits_file]\n\n" \
 "Example: stellina_platesolve image.fits")
+
+#define HELP_STELLINA_SCRIPT N_(\
+"stellina_script script_file]\n\n" \
+"Example: stellina_platesolve myscript.ssf")
 
 #endif // STELLINA_COMMANDS_H

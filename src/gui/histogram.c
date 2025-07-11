@@ -948,7 +948,7 @@ static int histo_update_preview() {
 
 static void set_histogram(gsl_histogram *histo, int layer) {
 	g_assert(layer >= 0 && layer < MAXVPORT);
-	if (com.layers_hist[layer])
+	if (com.layers_hist[layer] && (com.layers_hist[layer] != (void *)0x100000000))
 		gsl_histogram_free(com.layers_hist[layer]);
 	com.layers_hist[layer] = histo;
 }

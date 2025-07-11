@@ -289,6 +289,7 @@ static command commands[] = {
 	{"stellina_stats", 0, "stellina_stats", cmd_stellina_stats, STR_STELLINA_STATS, TRUE, REQ_CMD_NONE},
 	{"stellina_test_coords", 0, "stellina_test_coords", cmd_stellina_test_coords, STR_STELLINA_STATS, TRUE, REQ_CMD_NONE},
 	{"stellina_platesolve", 0, "stellina_platesolve", cmd_stellina_platesolve, STR_STELLINA_PLATESOLVE, TRUE, REQ_CMD_NONE},
+	{"stellina_script", 1, "stellina_script", cmd_stellina_script, STR_STELLINA_SCRIPT, TRUE, REQ_CMD_NONE},
 	EXTRA_COMMANDS
 	
 	{"",0,"",0, STR_NONE, FALSE, REQ_CMD_NONE}

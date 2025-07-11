@@ -3,29 +3,24 @@
  * Clean final Siril command implementations for Stellina processing
  */
 
+#include "core/siril.h"
+
+extern "C" {
+#include "io/single_image.h"
+};
+
 #include "stellina_processor.h"
 #include "stellina_commands.h"
-#include "core/siril.h"
 #include "core/proto.h"
 #include "core/command.h"
 #include "core/siril_log.h"
+#include "core/OS_utils.h"
 #include "gui/utils.h"
 #include <iostream>
 #include <cstring>
 #include <string>
 #include <cmath>
 #include <fitsio.h>
-
-// Define Siril command constants if not available
-#ifndef CMD_OK
-#define CMD_OK 0
-#endif
-#ifndef CMD_ARG_ERROR
-#define CMD_ARG_ERROR 1
-#endif
-#ifndef CMD_GENERIC_ERROR
-#define CMD_GENERIC_ERROR -1
-#endif
 
 // Progress callback function
 static void stellina_progress_handler(int current, int total, const char* message) {
@@ -442,6 +437,221 @@ int cmd_stellina_platesolve(int nb) {
     return CMD_OK;
 }
 
+static void update_log_icon(gboolean is_running) {
+	GtkImage *image = GTK_IMAGE(lookup_widget("image_log"));
+	if (is_running)
+		gtk_image_set_from_icon_name(image, "gtk-yes", GTK_ICON_SIZE_LARGE_TOOLBAR);
+	else
+		gtk_image_set_from_icon_name(image, "gtk-no", GTK_ICON_SIZE_LARGE_TOOLBAR);
+}
+
+struct log_status_bar_idle_data {
+	gchar *myline;
+	int line;
+};
+
+static gboolean log_status_bar_idle_callback(gpointer p) {
+	struct log_status_bar_idle_data *data = (struct log_status_bar_idle_data *) p;
+
+	GtkStatusbar *statusbar_script = GTK_STATUSBAR(lookup_widget("statusbar_script"));
+	gchar *status;
+	gchar *newline;
+
+	update_log_icon(TRUE);
+
+	newline = g_strdup(data->myline);
+	status = g_strdup_printf(_("Processing line %d: %s"), data->line, newline);
+
+	gtk_statusbar_push(statusbar_script, 0, status);
+	g_free(newline);
+	g_free(status);
+	g_free(data->myline);
+	free(data);
+
+	return FALSE;	// only run once
+}
+
+static void display_command_on_status_bar(int line, char *myline) {
+	if (!com.headless) {
+		struct log_status_bar_idle_data *data;
+
+		data = (struct log_status_bar_idle_data *)malloc(sizeof(struct log_status_bar_idle_data));
+		data->line = line;
+		data->myline = myline ? g_strdup(myline) : NULL;
+		gdk_threads_add_idle(log_status_bar_idle_callback, data);
+	}
+}
+
+int check_command_mode() {
+	/* until we have a proper implementation of modes, we just forbid other
+	 * commands to be run during live stacking */
+	int retval = 0;
+	if (livestacking_is_started()) {
+		retval = g_ascii_strcasecmp(word[0], "livestack") &&
+			g_ascii_strcasecmp(word[0], "stop_ls") &&
+			g_ascii_strcasecmp(word[0], "exit");
+		if (retval)
+			siril_log_message(_("This command cannot be run while live stacking is active, ignoring.\n"));
+
+	}
+	return retval;
+}
+
+static void clear_status_bar() {
+	GtkStatusbar *bar = GTK_STATUSBAR(lookup_widget("statusbar_script"));
+	gtk_statusbar_remove_all(bar, 0);
+	update_log_icon(FALSE);
+}
+
+static gboolean end_script(gpointer p) {
+	/* GTK+ code is ignored during scripts, this is a good place to redraw everything */
+	clear_status_bar();
+	gui_function(set_GUI_CWD, NULL);
+	gui_function(update_MenuItem, NULL);
+	notify_gfit_modified();
+	redraw(REMAP_ALL);
+	gui_function(redraw_previews, NULL);
+	update_zoom_label();
+	update_display_fwhm();
+	display_filename();
+	gui_function(new_selection_zone, NULL);
+	update_spinCPU(GINT_TO_POINTER(0));
+	set_cursor_waiting(FALSE);
+	return FALSE;
+}
+
+gpointer stellina_execute_script(gpointer p) {
+	GInputStream *input_stream = (GInputStream*) p;
+	gboolean checked_requires = FALSE;
+	gchar *buffer;
+	int line = 0, retval = 0;
+	int wordnb;
+	int startmem, endmem;
+	struct timeval t_start, t_end;
+
+	com.script = TRUE;
+	com.stop_script = FALSE;
+	com.script_thread_exited = FALSE;
+
+	gettimeofday(&t_start, NULL);
+
+	/* Now we want to save the cwd in order to come back after
+	 * script execution
+	 */
+	gchar *saved_cwd = g_strdup(com.wd);
+	startmem = get_available_memory() / BYTES_IN_A_MB;
+	gsize length = 0;
+	GDataInputStream *data_input = g_data_input_stream_new(input_stream);
+    int overall_retval = 0;
+	while ((buffer = g_data_input_stream_read_line_utf8(data_input, &length,
+			NULL, NULL))) {
+		++line;
+		if (com.stop_script) {
+			retval = 1;
+			g_free (buffer);
+			break;
+		}
+		/* Displays comments */
+		if (buffer[0] == '#') {
+			siril_log_color_message("%s\n", "blue", buffer);
+			g_free (buffer);
+			continue;
+		}
+
+		/* in Windows case, remove trailing CR */
+		remove_trailing_cr(buffer);
+		g_strstrip(buffer);
+
+		if (buffer[0] == '\0') {
+			g_free (buffer);
+			continue;
+		}
+
+		display_command_on_status_bar(line, buffer);
+		parse_line(buffer, length, &wordnb);
+		if (check_requires(&checked_requires, com.pref.script_check_requires)) {
+			g_free (buffer);
+			break;
+		}
+		if (check_command_mode()) {
+			g_free (buffer);
+			continue;
+		};
+
+		retval = execute_command(wordnb);
+		remove_child_from_children((GPid) -2); // remove the processing thread child
+		// reference (speculative - not always necessary, but simplest to
+		// call it every time just in case the command ran in the thread.)
+		if (retval && retval != CMD_NO_WAIT) {
+		  siril_log_message(_("Error in line %d ('%s'): %s.\n"), line, buffer, cmd_err_to_str((cmd_errors)retval));
+			siril_log_message(_("Exiting batch processing.\n"));
+			g_free (buffer);
+			break;
+		}
+		if (retval != CMD_NO_WAIT && waiting_for_thread()) {
+			overall_retval |= 1;
+			g_free (buffer);
+			break;	// abort script on command failure
+		}
+		endmem = get_available_memory() / BYTES_IN_A_MB;
+		siril_debug_print("End of command %s, memory difference: %d MB\n", word[0], startmem - endmem);
+		startmem = endmem;
+		memset(word, 0, sizeof word);
+		g_free (buffer);
+	}
+	g_object_unref(data_input);
+	g_object_unref(input_stream);
+
+	if (!com.headless) {
+		com.script = FALSE;
+		gui_function(end_script, NULL);
+	}
+
+	/* Now we want to restore the saved cwd */
+	siril_change_dir(saved_cwd, NULL);
+	writeinitfile();
+	if (!overall_retval) {
+		siril_log_message(_("Script execution finished successfully.\n"));
+		gettimeofday(&t_end, NULL);
+		show_time_msg(t_start, t_end, _("Total execution time"));
+	} else {
+		char *msg = siril_log_message(_("Script execution failed.\n"));
+		msg[strlen(msg) - 1] = '\0';
+		set_progress_bar_data(msg, PROGRESS_DONE);
+	}
+	g_free(saved_cwd);
+
+	if (com.script_thread) {
+		siril_debug_print("Script thread exiting\n");
+		com.script_thread_exited = TRUE;
+	}
+	/* If called from the GUI, re-enable widgets blocked during the script */
+	siril_add_idle(script_widgets_idle, NULL);
+	return GINT_TO_POINTER(retval);
+}
+
+int cmd_stellina_script(int nb) {
+  if (nb < 2) {
+        siril_log_color_message("Usage: stellina_script file\n", "red");
+        return CMD_ARG_ERROR;
+  }
+  char *script_file = word[1];
+  GError *error = NULL;
+  GFile *file = g_file_new_for_path(script_file);
+  GInputStream *input_stream = (GInputStream*) g_file_read(file, NULL, &error);
+
+  if (input_stream == NULL) {
+    if (error != NULL) {
+      g_clear_error(&error);
+      siril_log_message(_("File [%s] does not exist\n"), script_file);
+    }
+    g_object_unref(file);
+    return CMD_GENERIC_ERROR;
+  }
+  auto script_thread = g_thread_new("script", stellina_execute_script, input_stream);
+  return CMD_OK;
+}
+  
 /**
  * Initialize Stellina extension commands
  */
