@@ -797,13 +797,35 @@ void StellinaProcessor::processNextImage() {
         }
         logMessage("Image loaded successfully", "green");
         
-        // Perform plate solving
-        logMessage(QString("Attempting plate solve with RA=%.4f°, Dec=%.4f°").arg(ra).arg(dec), "blue");
-        if (!m_sirilClient->platesolve(ra, dec, m_focalLength, m_pixelSize, true)) {
+        // Perform plate solving (this can take 30-60 seconds)
+        logMessage(QString("Attempting plate solve with RA=%.4f°, Dec=%.4f° (this may take up to 2 minutes)").arg(ra).arg(dec), "blue");
+        
+        // Update progress to show we're working
+        QString originalProgressText = m_progressLabel->text();
+        
+        // Create a timer to update progress during plate solving
+        QTimer progressTimer;
+        int dotCount = 0;
+        connect(&progressTimer, &QTimer::timeout, [this, &dotCount]() {
+            QString dots = QString(".").repeated((dotCount % 4));
+            m_progressLabel->setText(QString("Plate solving image %1 of %2%3")
+                                        .arg(m_currentImageIndex + 1)
+                                        .arg(m_imagesToProcess.length())
+                                        .arg(dots.leftJustified(3, ' ')));
+            dotCount++;
+        });
+        progressTimer.start(500); // Update every 500ms
+        
+        bool platesolveSuccess = m_sirilClient->platesolve(ra, dec, m_focalLength, m_pixelSize, true);
+        
+        progressTimer.stop();
+        m_progressLabel->setText(originalProgressText); // Restore original text
+        
+        if (!platesolveSuccess) {
             logMessage("Plate solving failed (continuing anyway)", "orange");
             // Don't break - save the image anyway
         } else {
-            logMessage("Plate solving completed", "green");
+            logMessage("Plate solving completed successfully", "green");
         }
         
         // Save processed image

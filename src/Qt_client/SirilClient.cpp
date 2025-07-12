@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QThread>
 #include <QProcess>
+#include <QApplication>
+#include <QElapsedTimer>
 
 SirilClient::SirilClient(QObject *parent)
     : QObject(parent)
@@ -200,18 +202,36 @@ QPair<int, QByteArray> SirilClient::sendCommand(int commandId, const QByteArray 
         return qMakePair(STATUS_ERROR, QByteArray());
     }
     
-    if (!m_socket->waitForBytesWritten(30000)) { // Increased from 5000 to 30000
+    if (!m_socket->waitForBytesWritten(30000)) {
         setError("Timeout writing to socket");
         return qMakePair(STATUS_ERROR, QByteArray());
     }
+    
+    // Add a small delay with UI processing after sending
+    QApplication::processEvents();
     
     // Read response
     return readResponse();
 }
 
 QPair<int, QByteArray> SirilClient::readResponse() {
-    // Read response header (5 bytes: status + length)
-    if (!m_socket->waitForReadyRead(30000)) { // Increased from 10000 to 30000 (30 seconds)
+    // Read response header (5 bytes: status + length) with UI polling
+    QElapsedTimer timer;
+    timer.start();
+    const int timeoutMs = 120000; // 2 minutes
+    
+    while (!m_socket->bytesAvailable() && timer.elapsed() < timeoutMs) {
+        if (!m_socket->waitForReadyRead(100)) { // Short 100ms waits
+            QApplication::processEvents(); // Keep UI responsive
+            
+            // Check if socket has any data now
+            if (m_socket->bytesAvailable() > 0) {
+                break;
+            }
+        }
+    }
+    
+    if (m_socket->bytesAvailable() < 5 && timer.elapsed() >= timeoutMs) {
         setError("Timeout waiting for response");
         return qMakePair(STATUS_ERROR, QByteArray());
     }
@@ -232,7 +252,7 @@ QPair<int, QByteArray> SirilClient::readResponse() {
     // Read response data if any
     QByteArray responseData;
     if (responseLength > 0) {
-        if (!m_socket->waitForReadyRead(30000)) { // Increased from 5000 to 30000
+        if (!m_socket->waitForReadyRead(120000)) { // Increased to 2 minutes
             setError("Timeout waiting for response data");
             return qMakePair(STATUS_ERROR, QByteArray());
         }
