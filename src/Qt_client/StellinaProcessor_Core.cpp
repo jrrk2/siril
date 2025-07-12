@@ -15,7 +15,9 @@
 #include <QProcess>
 #include <QStandardItemModel>
 #include <QTableWidgetItem>
+#include <QThread>
 #include <cmath>
+#include <vector>
 
 StellinaProcessor::StellinaProcessor(QWidget *parent)
     : QMainWindow(parent)
@@ -132,25 +134,116 @@ QString StellinaProcessor::getOutputDirectoryForCurrentStage() const {
     }
 }
 
-// Utility functions for FITS metadata extraction
+// FITS metadata extraction functions - using cfitsio directly
 int StellinaProcessor::extractExposureTime(const QString &fitsFile) {
-    // This would normally use a FITS library like cfitsio
-    // For now, return a placeholder value
-    // In a real implementation, you'd read the EXPTIME or EXPOSURE header
-    Q_UNUSED(fitsFile)
-    return 300; // Placeholder: 5 minutes
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fitsFile.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
+        return 10; // Fallback: 10 seconds
+    }
+    
+    // For Stellina, exposure is in milliseconds under "EXPOSURE" keyword
+    int exposure_ms = 10000; // Default: 10 seconds (10000ms)
+    
+    if (fits_read_key(fptr, TINT, "EXPOSURE", &exposure_ms, nullptr, &status) != 0) {
+        // If EXPOSURE doesn't work, try other common keywords
+        double exptime_s = 10.0;
+        if (fits_read_key(fptr, TDOUBLE, "EXPTIME", &exptime_s, nullptr, &status) == 0) {
+            exposure_ms = static_cast<int>(exptime_s * 1000); // Convert seconds to ms
+        }
+        status = 0;
+    }
+    
+    fits_close_file(fptr, &status);
+    
+    // Convert milliseconds to seconds for consistent usage
+    return exposure_ms / 1000;
 }
 
 int StellinaProcessor::extractTemperature(const QString &fitsFile) {
-    // This would normally read the CCD-TEMP or similar header
-    Q_UNUSED(fitsFile)
-    return -10; // Placeholder: -10°C
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fitsFile.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
+        return 284; // Fallback: 11°C = 284K
+    }
+    
+    // For Stellina, temperature is under "TEMP" keyword in Celsius
+    double temperature_celsius = 11.2; // Default from your example
+    
+    if (fits_read_key(fptr, TDOUBLE, "TEMP", &temperature_celsius, nullptr, &status) != 0) {
+        // Try other common temperature keywords if TEMP fails
+        QStringList tempKeys = {"CCD-TEMP", "CCD_TEMP", "TEMPERAT", "SET-TEMP"};
+        for (const QString &key : tempKeys) {
+            QByteArray keyBytes = key.toLocal8Bit();
+            if (fits_read_key(fptr, TDOUBLE, keyBytes.data(), &temperature_celsius, nullptr, &status) == 0) {
+                break;
+            }
+            status = 0;
+        }
+    }
+    
+    fits_close_file(fptr, &status);
+    
+    // Convert Celsius to Kelvin and round to nearest integer
+    // K = °C + 273.15
+    double temperature_kelvin = temperature_celsius + 273.15;
+    return static_cast<int>(qRound(temperature_kelvin));
 }
 
 QString StellinaProcessor::extractBinning(const QString &fitsFile) {
-    // This would normally read the XBINNING/YBINNING headers
-    Q_UNUSED(fitsFile)
-    return "1x1"; // Placeholder
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fitsFile.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
+        return "1x1"; // Fallback
+    }
+    
+    // Stellina doesn't seem to have explicit binning keywords in your example
+    // Check the actual image dimensions vs sensor size to infer binning
+    long naxes[2];
+    if (fits_get_img_size(fptr, 2, naxes, &status) == 0) {
+        // Your example shows 3072x2080 which appears to be full resolution
+        // Stellina sensor is typically 3072x2080 at full res
+        if (naxes[0] == 3072 && naxes[1] == 2080) {
+            fits_close_file(fptr, &status);
+            return "1x1"; // Full resolution
+        } else if (naxes[0] == 1536 && naxes[1] == 1040) {
+            fits_close_file(fptr, &status);
+            return "2x2"; // Half resolution (2x2 binning)
+        } else if (naxes[0] == 1024 && naxes[1] == 693) {
+            fits_close_file(fptr, &status);
+            return "3x3"; // Third resolution (3x3 binning)
+        }
+    }
+    
+    // Try explicit binning keywords anyway
+    int xbin = 1, ybin = 1;
+    QStringList xbinKeys = {"XBINNING", "BINX", "BIN_X"};
+    QStringList ybinKeys = {"YBINNING", "BINY", "BIN_Y"};
+    
+    for (const QString &key : xbinKeys) {
+        QByteArray keyBytes = key.toLocal8Bit();
+        if (fits_read_key(fptr, TINT, keyBytes.data(), &xbin, nullptr, &status) == 0) {
+            break;
+        }
+        status = 0;
+    }
+    
+    for (const QString &key : ybinKeys) {
+        QByteArray keyBytes = key.toLocal8Bit();
+        if (fits_read_key(fptr, TINT, keyBytes.data(), &ybin, nullptr, &status) == 0) {
+            break;
+        }
+        status = 0;
+    }
+    
+    fits_close_file(fptr, &status);
+    return QString("%1x%2").arg(xbin).arg(ybin);
 }
 
 void StellinaProcessor::scanDarkFrames() {
@@ -173,31 +266,63 @@ void StellinaProcessor::scanDarkFrames() {
     
     // Group dark frames by exposure, temperature, and binning
     QMap<QString, QStringList> darkGroups;
+    QMap<QString, DarkFrame> darkInfo; // Store the representative info for each group
     
     for (const QString &darkFile : darkFiles) {
         QString fullPath = darkDir.absoluteFilePath(darkFile);
         
         int exposure = extractExposureTime(fullPath);
-        int temperature = extractTemperature(fullPath);
+        int temperatureK = extractTemperature(fullPath); // Now returns Kelvin
         QString binning = extractBinning(fullPath);
         
         if (exposure > 0) { // Valid dark frame
-            QString key = QString("%1_%2_%3").arg(exposure).arg(temperature).arg(binning);
+            QString key = QString("%1_%2_%3").arg(exposure).arg(temperatureK).arg(binning);
             darkGroups[key].append(fullPath);
+            
+            // Store representative info for this group (first file sets the pattern)
+            if (!darkInfo.contains(key)) {
+                DarkFrame dark;
+                dark.filepath = fullPath; // Representative file
+                dark.exposure = exposure;
+                dark.temperature = temperatureK; // Store as Kelvin
+                dark.binning = binning;
+                darkInfo[key] = dark;
+                
+                if (m_debugMode) {
+                    int temperatureC = temperatureK - 273; // Convert back to Celsius for display
+                    logMessage(QString("Dark group %1: %2s, %3K (%4°C), %5 - first file: %6")
+                                  .arg(darkInfo.size())
+                                  .arg(exposure)
+                                  .arg(temperatureK)
+                                  .arg(temperatureC)
+                                  .arg(binning)
+                                  .arg(QFileInfo(darkFile).fileName()), "gray");
+                }
+            }
+        } else {
+            if (m_debugMode) {
+                logMessage(QString("Skipped invalid dark frame: %1").arg(QFileInfo(darkFile).fileName()), "orange");
+            }
         }
     }
     
-    // Create DarkFrame entries
+    // Create DarkFrame entries from the groups
+    m_darkFrames.clear();
     for (auto it = darkGroups.begin(); it != darkGroups.end(); ++it) {
-        QStringList parts = it.key().split('_');
-        if (parts.size() >= 3) {
-            DarkFrame dark;
-            dark.filepath = it.value().first(); // Use first file as representative
-            dark.exposure = parts[0].toInt();
-            dark.temperature = parts[1].toInt();
-            dark.binning = parts[2];
-            
+        QString key = it.key();
+        if (darkInfo.contains(key)) {
+            DarkFrame dark = darkInfo[key];
+            // Update filepath to point to the first file in the group
+            dark.filepath = it.value().first();
             m_darkFrames.append(dark);
+            
+            int temperatureC = dark.temperature - 273; // Convert for display
+            logMessage(QString("Dark group: %1s exposure, %2K (%3°C), %4 binning → %5 frames")
+                          .arg(dark.exposure)
+                          .arg(dark.temperature)
+                          .arg(temperatureC)
+                          .arg(dark.binning)
+                          .arg(it.value().size()), "blue");
         }
     }
     
@@ -208,19 +333,32 @@ void StellinaProcessor::scanDarkFrames() {
     m_darkFramesTable->setRowCount(m_darkFrames.size());
     for (int i = 0; i < m_darkFrames.size(); ++i) {
         const DarkFrame &dark = m_darkFrames[i];
+        QString key = QString("%1_%2_%3").arg(dark.exposure).arg(dark.temperature).arg(dark.binning);
         
-        m_darkFramesTable->setItem(i, 0, new QTableWidgetItem(QFileInfo(dark.filepath).fileName()));
-        m_darkFramesTable->setItem(i, 1, new QTableWidgetItem(QString::number(dark.exposure)));
-        m_darkFramesTable->setItem(i, 2, new QTableWidgetItem(QString::number(dark.temperature)));
+        int temperatureC = dark.temperature - 273;
+        m_darkFramesTable->setItem(i, 0, new QTableWidgetItem(QString("%1s_%2K_%3").arg(dark.exposure).arg(dark.temperature).arg(dark.binning)));
+        m_darkFramesTable->setItem(i, 1, new QTableWidgetItem(QString("%1s").arg(dark.exposure)));
+        m_darkFramesTable->setItem(i, 2, new QTableWidgetItem(QString("%1K (%2°C)").arg(dark.temperature).arg(temperatureC)));
         m_darkFramesTable->setItem(i, 3, new QTableWidgetItem(dark.binning));
         
         // Count how many dark frames in this group
-        QString key = QString("%1_%2_%3").arg(dark.exposure).arg(dark.temperature).arg(dark.binning);
         int count = darkGroups[key].size();
         m_darkFramesTable->setItem(i, 4, new QTableWidgetItem(QString::number(count)));
     }
     
     logMessage(QString("Dark frame scan complete: %1 groups found").arg(m_darkFrames.size()), "green");
+    
+    // Show summary of what was found
+    if (!m_darkFrames.isEmpty()) {
+        QStringList summary;
+        for (const DarkFrame &dark : m_darkFrames) {
+            QString key = QString("%1_%2_%3").arg(dark.exposure).arg(dark.temperature).arg(dark.binning);
+            int count = darkGroups[key].size();
+            int temperatureC = dark.temperature - 273;
+            summary.append(QString("%1×%2s@%3K").arg(count).arg(dark.exposure).arg(dark.temperature));
+        }
+        logMessage(QString("Found: %1").arg(summary.join(", ")), "blue");
+    }
 }
 
 // Dark calibration functions
@@ -285,105 +423,209 @@ bool StellinaProcessor::createMasterDark(const QStringList &darkFrames, const QS
         }
     }
     
-    // Multiple dark frames - stack them using Siril
-    QString tempSeqName = QString("temp_dark_seq_%1").arg(QDateTime::currentMSecsSinceEpoch());
-    QString tempDir = QDir(m_calibratedDirectory).absoluteFilePath(tempSeqName);
-    QDir().mkpath(tempDir);
+    // Use direct FITS manipulation for better performance
+    logMessage("Using direct FITS processing for master dark creation", "blue");
+    return createMasterDarkDirect(darkFrames, outputPath);
+}
+
+bool StellinaProcessor::createMasterDarkDirect(const QStringList &darkFrames, const QString &outputPath) {
+    if (darkFrames.isEmpty()) {
+        return false;
+    }
     
-    // Copy dark frames to temporary directory with sequential naming
+    if (darkFrames.size() == 1) {
+        return QFile::copy(darkFrames.first(), outputPath);
+    }
+    
+    logMessage(QString("Creating master dark from %1 frames using direct FITS manipulation...").arg(darkFrames.size()), "blue");
+    
+    fitsfile *firstFits = nullptr;
+    fitsfile *outputFits = nullptr;
+    int status = 0;
+    
+    // Open first dark frame to get dimensions and header info
+    QByteArray firstPath = darkFrames.first().toLocal8Bit();
+    if (fits_open_file(&firstFits, firstPath.data(), READONLY, &status)) {
+        logMessage(QString("Failed to open first dark frame: %1 (FITS error: %2)").arg(darkFrames.first()).arg(status), "red");
+        return false;
+    }
+    
+    // Get image dimensions
+    int naxis;
+    long naxes[2];
+    if (fits_get_img_dim(firstFits, &naxis, &status) || 
+        fits_get_img_size(firstFits, 2, naxes, &status)) {
+        logMessage(QString("Failed to get image dimensions (FITS error: %1)").arg(status), "red");
+        fits_close_file(firstFits, &status);
+        return false;
+    }
+    
+    long totalPixels = naxes[0] * naxes[1];
+    logMessage(QString("Image dimensions: %1 x %2 (%3 pixels)").arg(naxes[0]).arg(naxes[1]).arg(totalPixels), "blue");
+    
+    // Create output FITS file
+    QByteArray outputPathBytes = QString("!%1").arg(outputPath).toLocal8Bit(); // ! forces overwrite
+    if (fits_create_file(&outputFits, outputPathBytes.data(), &status)) {
+        logMessage(QString("Failed to create output FITS file: %1 (FITS error: %2)").arg(outputPath).arg(status), "red");
+        fits_close_file(firstFits, &status);
+        return false;
+    }
+    
+    // Copy header from first frame
+    if (fits_copy_header(firstFits, outputFits, &status)) {
+        logMessage(QString("Failed to copy FITS header (FITS error: %1)").arg(status), "red");
+        fits_close_file(firstFits, &status);
+        fits_close_file(outputFits, &status);
+        return false;
+    }
+    
+    fits_close_file(firstFits, &status);
+    
+    // Allocate memory for accumulation (using double for precision)
+    std::vector<double> accumulator(totalPixels, 0.0);
+    std::vector<float> pixelBuffer(totalPixels);
+    
+    int successfulFrames = 0;
+    
+    // Process each dark frame
     for (int i = 0; i < darkFrames.size(); ++i) {
-        QString srcFile = darkFrames[i];
-        QString dstFile = QDir(tempDir).absoluteFilePath(QString("%1_%2.fits")
-                                                            .arg(tempSeqName)
-                                                            .arg(i + 1, 4, 10, QChar('0')));
+        const QString &darkPath = darkFrames[i];
+        fitsfile *darkFits = nullptr;
         
-        if (!QFile::copy(srcFile, dstFile)) {
-            logMessage(QString("Failed to copy dark frame: %1").arg(QFileInfo(srcFile).fileName()), "red");
-            return false;
+        QByteArray darkPathBytes = darkPath.toLocal8Bit();
+        if (fits_open_file(&darkFits, darkPathBytes.data(), READONLY, &status)) {
+            logMessage(QString("Failed to open dark frame %1: %2 (FITS error: %3)")
+                          .arg(i+1).arg(QFileInfo(darkPath).fileName()).arg(status), "orange");
+            status = 0; // Reset status to continue
+            continue;
+        }
+        
+        // Read pixel data
+        long firstPixel = 1;
+        if (fits_read_img(darkFits, TFLOAT, firstPixel, totalPixels, nullptr, 
+                         pixelBuffer.data(), nullptr, &status)) {
+            logMessage(QString("Failed to read pixel data from frame %1: %2 (FITS error: %3)")
+                          .arg(i+1).arg(QFileInfo(darkPath).fileName()).arg(status), "orange");
+            fits_close_file(darkFits, &status);
+            status = 0;
+            continue;
+        }
+        
+        // Add to accumulator
+        for (long j = 0; j < totalPixels; ++j) {
+            accumulator[j] += pixelBuffer[j];
+        }
+        
+        successfulFrames++;
+        fits_close_file(darkFits, &status);
+        
+        // Update progress
+        if (i % 5 == 0 || i == darkFrames.size() - 1) {
+            logMessage(QString("Processed dark frame %1 of %2").arg(i+1).arg(darkFrames.size()), "gray");
         }
     }
     
-    // Change to temp directory
-    QString oldWorkDir = m_sirilClient->getWorkingDirectory();
-    if (!m_sirilClient->changeDirectory(tempDir)) {
-        logMessage("Failed to change to temp directory", "red");
-        return false;
-    }
-    
-    // Create sequence
-    QString convertCmd = QString("convert %1 -out=%1").arg(tempSeqName);
-    if (!m_sirilClient->sendSirilCommand(convertCmd)) {
-        logMessage("Failed to create dark sequence", "red");
-        m_sirilClient->changeDirectory(oldWorkDir);
-        return false;
-    }
-    
-    // Load the sequence
-    QString loadCmd = QString("load %1").arg(tempSeqName);
-    if (!m_sirilClient->sendSirilCommand(loadCmd)) {
-        logMessage("Failed to load dark sequence", "red");
-        m_sirilClient->changeDirectory(oldWorkDir);
-        return false;
-    }
-    
-    // Stack using median (best for dark frames)
-    QString stackCmd = QString("stack %1 rej none -type=median -norm=none").arg(tempSeqName);
-    if (!m_sirilClient->sendSirilCommand(stackCmd)) {
-        logMessage("Failed to stack dark frames", "red");
-        m_sirilClient->changeDirectory(oldWorkDir);
-        return false;
-    }
-    
-    // Save the master dark
-    QString tempMasterPath = QDir(tempDir).absoluteFilePath(QString("stacked_%1.fits").arg(tempSeqName));
-    if (!m_sirilClient->saveImage(tempMasterPath)) {
-        logMessage("Failed to save master dark", "red");
-        m_sirilClient->changeDirectory(oldWorkDir);
-        return false;
-    }
-    
-    m_sirilClient->closeImage();
-    
-    // Restore working directory
-    m_sirilClient->changeDirectory(oldWorkDir);
-    
-    // Move master dark to final location
-    if (QFile::exists(outputPath)) {
+    if (successfulFrames == 0) {
+        logMessage("No dark frames could be processed", "red");
+        fits_close_file(outputFits, &status);
         QFile::remove(outputPath);
-    }
-    
-    if (QFile::rename(tempMasterPath, outputPath)) {
-        // Clean up temp directory
-        QDir tempDirObj(tempDir);
-        tempDirObj.removeRecursively();
-        
-        logMessage(QString("Master dark created successfully from %1 frames").arg(darkFrames.size()), "green");
-        return true;
-    } else {
-        logMessage("Failed to move master dark to final location", "red");
         return false;
     }
+    
+    logMessage(QString("Successfully read %1 of %2 dark frames, computing average...").arg(successfulFrames).arg(darkFrames.size()), "blue");
+    
+    // Average the accumulated values
+    for (long i = 0; i < totalPixels; ++i) {
+        pixelBuffer[i] = static_cast<float>(accumulator[i] / successfulFrames);
+    }
+    
+    // Write averaged data to output
+    long firstPixel = 1;
+    if (fits_write_img(outputFits, TFLOAT, firstPixel, totalPixels, 
+                      pixelBuffer.data(), &status)) {
+        logMessage(QString("Failed to write master dark data (FITS error: %1)").arg(status), "red");
+        fits_close_file(outputFits, &status);
+        QFile::remove(outputPath);
+        return false;
+    }
+    
+    // Update header with processing info
+    QString historyComment = QString("Master dark from %1 frames").arg(successfulFrames);
+    QByteArray historyBytes = historyComment.toLocal8Bit();
+    if (fits_write_history(outputFits, historyBytes.data(), &status)) {
+        // Non-critical error, just log it
+        logMessage("Warning: Could not write processing history to header", "orange");
+        status = 0;
+    }
+    
+    // Add custom keyword for frame count
+    if (fits_write_key(outputFits, TINT, "NFRAMES", &successfulFrames, "Number of frames averaged", &status)) {
+        logMessage("Warning: Could not write frame count to header", "orange");
+        status = 0;
+    }
+    
+    fits_close_file(outputFits, &status);
+    
+    if (status != 0) {
+        logMessage(QString("FITS error occurred during master dark creation (error: %1)").arg(status), "red");
+        QFile::remove(outputPath);
+        return false;
+    }
+    
+    logMessage(QString("Master dark created successfully from %1 frames (averaged %2 frames)")
+                  .arg(darkFrames.size()).arg(successfulFrames), "green");
+    return true;
 }
 
 bool StellinaProcessor::applyMasterDark(const QString &lightFrame, const QString &masterDark, const QString &outputFrame) {
     logMessage(QString("Applying master dark to %1").arg(QFileInfo(lightFrame).fileName()), "blue");
     
-    // Load light frame
-    if (!m_sirilClient->loadImage(lightFrame)) {
-        logMessage("Failed to load light frame", "red");
+    // Add a small delay to prevent overwhelming Siril
+    QThread::msleep(100);
+    
+    // Try loading the light frame with retry logic
+    int maxRetries = 3;
+    bool loadSuccess = false;
+    
+    for (int attempt = 1; attempt <= maxRetries; ++attempt) {
+        if (m_sirilClient->loadImage(lightFrame)) {
+            loadSuccess = true;
+            break;
+        } else {
+            if (attempt < maxRetries) {
+                logMessage(QString("Load attempt %1 failed, retrying...").arg(attempt), "orange");
+                QThread::msleep(500); // Wait before retry
+            }
+        }
+    }
+    
+    if (!loadSuccess) {
+        logMessage("Failed to load light frame after retries", "red");
         return false;
     }
     
     // Try Siril's calibrate command first
-    QString calibrateCmd = QString("calibrate_single %1").arg(masterDark);
+    QString calibrateCmd = QString("calibrate_single \"%1\"").arg(masterDark);
     bool calibrateSuccess = m_sirilClient->sendSirilCommand(calibrateCmd);
     
     if (!calibrateSuccess) {
         logMessage("calibrate_single failed, using manual subtraction", "orange");
         
-        // Manual subtraction method
-        QString loadDarkCmd = QString("load %1 $masterdark").arg(masterDark);
-        if (!m_sirilClient->sendSirilCommand(loadDarkCmd)) {
+        // Manual subtraction method with retry
+        QString loadDarkCmd = QString("load \"%1\" $masterdark").arg(masterDark);
+        bool darkLoadSuccess = false;
+        
+        for (int attempt = 1; attempt <= 2; ++attempt) {
+            if (m_sirilClient->sendSirilCommand(loadDarkCmd)) {
+                darkLoadSuccess = true;
+                break;
+            } else if (attempt < 2) {
+                logMessage("Failed to load master dark, retrying...", "orange");
+                QThread::msleep(300);
+            }
+        }
+        
+        if (!darkLoadSuccess) {
             logMessage("Failed to load master dark", "red");
             m_sirilClient->closeImage();
             return false;
@@ -397,8 +639,19 @@ bool StellinaProcessor::applyMasterDark(const QString &lightFrame, const QString
         }
     }
     
-    // Save calibrated frame
-    if (!m_sirilClient->saveImage(outputFrame)) {
+    // Save calibrated frame with retry
+    bool saveSuccess = false;
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        if (m_sirilClient->saveImage(outputFrame)) {
+            saveSuccess = true;
+            break;
+        } else if (attempt < 2) {
+            logMessage("Save attempt failed, retrying...", "orange");
+            QThread::msleep(200);
+        }
+    }
+    
+    if (!saveSuccess) {
         logMessage("Failed to save calibrated frame", "red");
         m_sirilClient->closeImage();
         return false;
@@ -414,7 +667,7 @@ bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
     
     // Extract light frame characteristics
     int lightExposure = extractExposureTime(lightFrame);
-    int lightTemperature = extractTemperature(lightFrame);
+    int lightTemperatureK = extractTemperature(lightFrame); // Now in Kelvin
     QString lightBinning = extractBinning(lightFrame);
     
     if (lightExposure <= 0) {
@@ -423,21 +676,22 @@ bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
     }
     
     // Find all matching dark frames
-    QStringList matchingDarks = findAllMatchingDarkFrames(lightExposure, lightTemperature, lightBinning);
+    QStringList matchingDarks = findAllMatchingDarkFrames(lightExposure, lightTemperatureK, lightBinning);
     
     if (matchingDarks.isEmpty()) {
-        logMessage(QString("No matching dark frames found for exposure=%1s, temp=%2°C, binning=%3")
-                      .arg(lightExposure).arg(lightTemperature).arg(lightBinning), "orange");
+        int temperatureC = lightTemperatureK - 273;
+        logMessage(QString("No matching dark frames found for exposure=%1s, temp=%2K (%3°C), binning=%4")
+                      .arg(lightExposure).arg(lightTemperatureK).arg(temperatureC).arg(lightBinning), "orange");
         m_skippedCount++;
         return true; // Continue processing without dark calibration
     }
     
     logMessage(QString("Found %1 matching dark frames").arg(matchingDarks.size()), "blue");
     
-    // Create master dark for this combination
-    QString masterDarkName = QString("master_dark_%1s_%2C_%3.fits")
+    // Create master dark for this combination using Kelvin in filename
+    QString masterDarkName = QString("master_dark_%1s_%2K_%3.fits")
                                 .arg(lightExposure)
-                                .arg(lightTemperature)
+                                .arg(lightTemperatureK)
                                 .arg(lightBinning);
     QString masterDarkPath = QDir(m_calibratedDirectory).absoluteFilePath(masterDarkName);
     
@@ -447,7 +701,9 @@ bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
             logMessage("Failed to create master dark", "red");
             return false;
         }
-        logMessage(QString("Created master dark: %1").arg(masterDarkName), "green");
+        int temperatureC = lightTemperatureK - 273;
+        logMessage(QString("Created master dark: %1 (from %2K/%3°C data)")
+                      .arg(masterDarkName).arg(lightTemperatureK).arg(temperatureC), "green");
     } else {
         logMessage(QString("Using existing master dark: %1").arg(masterDarkName), "blue");
     }

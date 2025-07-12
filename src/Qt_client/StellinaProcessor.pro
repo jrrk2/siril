@@ -37,6 +37,7 @@ unix:!macx {
 
 # Include directories
 INCLUDEPATH += .
+INCLUDEPATH += /opt/homebrew/include
 
 # Source files
 SOURCES += \
@@ -72,7 +73,7 @@ CONFIG(debug, debug|release) {
 CONFIG += warn_on
 
 # Additional libraries (if needed)
-# LIBS += -lm
+LIBS += -lm -lcfitsio
 
 # Deployment settings for macOS
 macx {

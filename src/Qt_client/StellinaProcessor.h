@@ -29,6 +29,9 @@
 
 #include "SirilClient.h"
 
+// cfitsio is required for Siril, so we can assume it's available
+#include <fitsio.h>
+
 // Processing modes
 enum ProcessingMode {
     MODE_BASIC_PLATESOLVE = 0,
@@ -122,6 +125,7 @@ private:
     bool findMatchingDarkFrame(const QString &lightFrame, DarkFrame &darkFrame); // Deprecated
     QStringList findAllMatchingDarkFrames(int targetExposure, int targetTemperature, const QString &targetBinning);
     bool createMasterDark(const QStringList &darkFrames, const QString &outputPath);
+    bool createMasterDarkDirect(const QStringList &darkFrames, const QString &outputPath);
     bool applyMasterDark(const QString &lightFrame, const QString &masterDark, const QString &outputFrame);
     int extractExposureTime(const QString &fitsFile);
     int extractTemperature(const QString &fitsFile);
