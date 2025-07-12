@@ -2371,3 +2371,65 @@ void execute_python_script(gchar* script_name, gboolean from_file, gboolean sync
 	g_strfreev(env);
 
 }
+
+// In the main initialization function (probably main.c or core initialization)
+gboolean initialize_external_ipc(void) {
+    if (com.external_ipc_active) {
+        return TRUE; // Already initialized
+    }
+    
+    // Generate predictable socket path  
+    gchar *socket_path;
+#ifdef _WIN32
+    socket_path = g_strdup("\\\\.\\pipe\\siril_external");
+#else
+    socket_path = g_strdup_printf("/tmp/siril_%d.sock", getpid());
+#endif
+    
+    // Create connection using existing Python IPC infrastructure
+    com.external_conn = create_connection(socket_path);
+    if (!com.external_conn) {
+        siril_debug_print("Failed to create external IPC connection\n");
+        g_free(socket_path);
+        return FALSE;
+    }
+    
+    // Start worker thread
+    com.external_worker = g_thread_new("external-ipc", 
+                                      connection_worker, 
+                                      com.external_conn);
+    
+    com.external_ipc_active = TRUE;
+    siril_log_message(_("External IPC enabled on %s\n"), socket_path);
+    
+    g_free(socket_path);
+    return TRUE;
+}
+
+// Call during main Siril initialization
+void siril_app_startup(void) {
+    // ... existing initialization ...
+    
+    // Always enable external IPC
+    if (!initialize_external_ipc()) {
+        siril_log_color_message(_("Warning: External IPC could not be initialized\n"), "salmon");
+    }
+    
+    // ... rest of initialization ...
+}
+
+void siril_app_shutdown(void) {
+    // ... existing cleanup ...
+    
+    // Cleanup external IPC
+    if (com.external_ipc_active) {
+        cleanup_connection(com.external_conn);
+        if (com.external_worker) {
+            g_thread_join(com.external_worker);
+        }
+        com.external_ipc_active = FALSE;
+        siril_debug_print("External IPC cleaned up\n");
+    }
+    
+    // ... rest of cleanup ...
+}

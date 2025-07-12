@@ -644,6 +644,11 @@ int main(int argc, char *argv[]) {
 		g_value_unset(&value);
 	}
 
+	// Initialize external IPC after basic setup
+	if (!initialize_external_ipc()) {
+	  siril_log_color_message(_("Warning: External IPC could not be initialized\n"), "salmon");
+	}
+
 	status = g_application_run(G_APPLICATION(app), argc, argv);
 	if (status) {
 		gchar *help_msg;

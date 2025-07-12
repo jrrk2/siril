@@ -195,5 +195,8 @@ shared_memory_info_t* handle_rawdata_request(Connection *conn, void* data, size_
 void initialize_python_venv_in_thread();
 void shutdown_python_communication(CommunicationState *commstate);
 void rebuild_venv();
+gboolean initialize_external_ipc(void);
+void cleanup_external_ipc(void);
+gboolean is_external_ipc_active(void);
 
 #endif
