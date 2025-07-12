@@ -252,7 +252,7 @@ QPair<int, QByteArray> SirilClient::readResponse() {
     // Read response data if any
     QByteArray responseData;
     if (responseLength > 0) {
-        if (!m_socket->waitForReadyRead(120000)) { // Increased to 2 minutes
+        if (!m_socket->waitForReadyRead(1000)) { // Increased to 2 minutes
             setError("Timeout waiting for response data");
             return qMakePair(STATUS_ERROR, QByteArray());
         }
