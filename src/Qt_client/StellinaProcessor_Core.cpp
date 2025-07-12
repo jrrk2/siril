@@ -39,7 +39,6 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
     , m_autoMatchDarks(true)
     , m_temperatureTolerance(5)
     , m_exposureTolerance(10)
-    , m_createMasterDark(true)
     , m_sequenceName("stellina_sequence")
 {
     setWindowTitle("Enhanced Stellina Processor for Siril - v2.0");
@@ -226,60 +225,247 @@ void StellinaProcessor::scanDarkFrames() {
 
 // Dark calibration functions
 bool StellinaProcessor::findMatchingDarkFrame(const QString &lightFrame, DarkFrame &darkFrame) {
-    if (!m_autoMatchDarks || m_darkFrames.isEmpty()) {
+    // This method is now deprecated - we always use findAllMatchingDarkFrames instead
+    // Keep it for compatibility but it's not used in the new workflow
+    Q_UNUSED(lightFrame)
+    Q_UNUSED(darkFrame)
+    return false;
+}
+
+QStringList StellinaProcessor::findAllMatchingDarkFrames(int targetExposure, int targetTemperature, const QString &targetBinning) {
+    QStringList matchingDarks;
+    
+    if (m_darkDirectory.isEmpty()) {
+        return matchingDarks;
+    }
+    
+    QDir darkDir(m_darkDirectory);
+    if (!darkDir.exists()) {
+        return matchingDarks;
+    }
+    
+    QStringList darkFiles = darkDir.entryList(QStringList() << "*.fits" << "*.fit" << "*.FITS" << "*.FIT", QDir::Files);
+    
+    for (const QString &darkFile : darkFiles) {
+        QString fullPath = darkDir.absoluteFilePath(darkFile);
+        
+        int exposure = extractExposureTime(fullPath);
+        int temperature = extractTemperature(fullPath);
+        QString binning = extractBinning(fullPath);
+        
+        // Check if this dark frame matches the light frame characteristics
+        bool exposureMatch = qAbs(exposure - targetExposure) <= (targetExposure * m_exposureTolerance / 100);
+        bool temperatureMatch = qAbs(temperature - targetTemperature) <= m_temperatureTolerance;
+        bool binningMatch = (binning == targetBinning);
+        
+        if (exposureMatch && temperatureMatch && binningMatch) {
+            matchingDarks.append(fullPath);
+        }
+    }
+    
+    return matchingDarks;
+}
+
+bool StellinaProcessor::createMasterDark(const QStringList &darkFrames, const QString &outputPath) {
+    if (darkFrames.isEmpty()) {
+        logMessage("No dark frames provided for master dark creation", "red");
         return false;
     }
     
+    logMessage(QString("Creating master dark from %1 frames...").arg(darkFrames.size()), "blue");
+    
+    if (darkFrames.size() == 1) {
+        // Only one dark frame, just copy it
+        if (QFile::copy(darkFrames.first(), outputPath)) {
+            logMessage("Master dark created (single frame copy)", "green");
+            return true;
+        } else {
+            logMessage("Failed to copy single dark frame", "red");
+            return false;
+        }
+    }
+    
+    // Multiple dark frames - stack them using Siril
+    QString tempSeqName = QString("temp_dark_seq_%1").arg(QDateTime::currentMSecsSinceEpoch());
+    QString tempDir = QDir(m_calibratedDirectory).absoluteFilePath(tempSeqName);
+    QDir().mkpath(tempDir);
+    
+    // Copy dark frames to temporary directory with sequential naming
+    for (int i = 0; i < darkFrames.size(); ++i) {
+        QString srcFile = darkFrames[i];
+        QString dstFile = QDir(tempDir).absoluteFilePath(QString("%1_%2.fits")
+                                                            .arg(tempSeqName)
+                                                            .arg(i + 1, 4, 10, QChar('0')));
+        
+        if (!QFile::copy(srcFile, dstFile)) {
+            logMessage(QString("Failed to copy dark frame: %1").arg(QFileInfo(srcFile).fileName()), "red");
+            return false;
+        }
+    }
+    
+    // Change to temp directory
+    QString oldWorkDir = m_sirilClient->getWorkingDirectory();
+    if (!m_sirilClient->changeDirectory(tempDir)) {
+        logMessage("Failed to change to temp directory", "red");
+        return false;
+    }
+    
+    // Create sequence
+    QString convertCmd = QString("convert %1 -out=%1").arg(tempSeqName);
+    if (!m_sirilClient->sendSirilCommand(convertCmd)) {
+        logMessage("Failed to create dark sequence", "red");
+        m_sirilClient->changeDirectory(oldWorkDir);
+        return false;
+    }
+    
+    // Load the sequence
+    QString loadCmd = QString("load %1").arg(tempSeqName);
+    if (!m_sirilClient->sendSirilCommand(loadCmd)) {
+        logMessage("Failed to load dark sequence", "red");
+        m_sirilClient->changeDirectory(oldWorkDir);
+        return false;
+    }
+    
+    // Stack using median (best for dark frames)
+    QString stackCmd = QString("stack %1 rej none -type=median -norm=none").arg(tempSeqName);
+    if (!m_sirilClient->sendSirilCommand(stackCmd)) {
+        logMessage("Failed to stack dark frames", "red");
+        m_sirilClient->changeDirectory(oldWorkDir);
+        return false;
+    }
+    
+    // Save the master dark
+    QString tempMasterPath = QDir(tempDir).absoluteFilePath(QString("stacked_%1.fits").arg(tempSeqName));
+    if (!m_sirilClient->saveImage(tempMasterPath)) {
+        logMessage("Failed to save master dark", "red");
+        m_sirilClient->changeDirectory(oldWorkDir);
+        return false;
+    }
+    
+    m_sirilClient->closeImage();
+    
+    // Restore working directory
+    m_sirilClient->changeDirectory(oldWorkDir);
+    
+    // Move master dark to final location
+    if (QFile::exists(outputPath)) {
+        QFile::remove(outputPath);
+    }
+    
+    if (QFile::rename(tempMasterPath, outputPath)) {
+        // Clean up temp directory
+        QDir tempDirObj(tempDir);
+        tempDirObj.removeRecursively();
+        
+        logMessage(QString("Master dark created successfully from %1 frames").arg(darkFrames.size()), "green");
+        return true;
+    } else {
+        logMessage("Failed to move master dark to final location", "red");
+        return false;
+    }
+}
+
+bool StellinaProcessor::applyMasterDark(const QString &lightFrame, const QString &masterDark, const QString &outputFrame) {
+    logMessage(QString("Applying master dark to %1").arg(QFileInfo(lightFrame).fileName()), "blue");
+    
+    // Load light frame
+    if (!m_sirilClient->loadImage(lightFrame)) {
+        logMessage("Failed to load light frame", "red");
+        return false;
+    }
+    
+    // Try Siril's calibrate command first
+    QString calibrateCmd = QString("calibrate_single %1").arg(masterDark);
+    bool calibrateSuccess = m_sirilClient->sendSirilCommand(calibrateCmd);
+    
+    if (!calibrateSuccess) {
+        logMessage("calibrate_single failed, using manual subtraction", "orange");
+        
+        // Manual subtraction method
+        QString loadDarkCmd = QString("load %1 $masterdark").arg(masterDark);
+        if (!m_sirilClient->sendSirilCommand(loadDarkCmd)) {
+            logMessage("Failed to load master dark", "red");
+            m_sirilClient->closeImage();
+            return false;
+        }
+        
+        // Subtract master dark from light frame
+        if (!m_sirilClient->sendSirilCommand("sub $masterdark")) {
+            logMessage("Failed to subtract master dark", "red");
+            m_sirilClient->closeImage();
+            return false;
+        }
+    }
+    
+    // Save calibrated frame
+    if (!m_sirilClient->saveImage(outputFrame)) {
+        logMessage("Failed to save calibrated frame", "red");
+        m_sirilClient->closeImage();
+        return false;
+    }
+    
+    m_sirilClient->closeImage();
+    logMessage("Master dark applied successfully", "green");
+    return true;
+}
+
+bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
+    m_currentTaskLabel->setText("Dark calibration...");
+    
+    // Extract light frame characteristics
     int lightExposure = extractExposureTime(lightFrame);
     int lightTemperature = extractTemperature(lightFrame);
     QString lightBinning = extractBinning(lightFrame);
     
     if (lightExposure <= 0) {
+        logMessage("Could not determine light frame exposure time", "red");
         return false;
     }
     
-    // Find best matching dark frame
-    for (const DarkFrame &dark : m_darkFrames) {
-        bool exposureMatch = qAbs(dark.exposure - lightExposure) <= (lightExposure * m_exposureTolerance / 100);
-        bool temperatureMatch = qAbs(dark.temperature - lightTemperature) <= m_temperatureTolerance;
-        bool binningMatch = (dark.binning == lightBinning);
-        
-        if (exposureMatch && temperatureMatch && binningMatch) {
-            darkFrame = dark;
-            return true;
+    // Find all matching dark frames
+    QStringList matchingDarks = findAllMatchingDarkFrames(lightExposure, lightTemperature, lightBinning);
+    
+    if (matchingDarks.isEmpty()) {
+        logMessage(QString("No matching dark frames found for exposure=%1s, temp=%2°C, binning=%3")
+                      .arg(lightExposure).arg(lightTemperature).arg(lightBinning), "orange");
+        m_skippedCount++;
+        return true; // Continue processing without dark calibration
+    }
+    
+    logMessage(QString("Found %1 matching dark frames").arg(matchingDarks.size()), "blue");
+    
+    // Create master dark for this combination
+    QString masterDarkName = QString("master_dark_%1s_%2C_%3.fits")
+                                .arg(lightExposure)
+                                .arg(lightTemperature)
+                                .arg(lightBinning);
+    QString masterDarkPath = QDir(m_calibratedDirectory).absoluteFilePath(masterDarkName);
+    
+    // Check if master dark already exists
+    if (!QFile::exists(masterDarkPath)) {
+        if (!createMasterDark(matchingDarks, masterDarkPath)) {
+            logMessage("Failed to create master dark", "red");
+            return false;
         }
+        logMessage(QString("Created master dark: %1").arg(masterDarkName), "green");
+    } else {
+        logMessage(QString("Using existing master dark: %1").arg(masterDarkName), "blue");
     }
     
-    return false;
-}
-
-bool StellinaProcessor::applyDarkCalibration(const QString &lightFrame, const QString &darkFrame, const QString &outputFrame) {
-    // Load light frame
-    if (!m_sirilClient->loadImage(lightFrame)) {
+    // Apply master dark to light frame
+    QString outputName = QString("dark_calibrated_%1.fits")
+                            .arg(QFileInfo(lightFrame).baseName());
+    QString outputPath = QDir(m_calibratedDirectory).absoluteFilePath(outputName);
+    
+    if (applyMasterDark(lightFrame, masterDarkPath, outputPath)) {
+        m_darkCalibratedFiles.append(outputPath);
+        m_darkCalibratedCount++;
+        logMessage(QString("Dark calibration successful: %1").arg(outputName), "green");
+        return true;
+    } else {
+        logMessage("Dark calibration failed", "red");
         return false;
     }
-    
-    // Apply dark subtraction
-    QString command = QString("calibrate %1").arg(QFileInfo(darkFrame).baseName());
-    if (!m_sirilClient->sendSirilCommand(command)) {
-        return false;
-    }
-    
-    // Save calibrated frame
-    if (!m_sirilClient->saveImage(outputFrame)) {
-        return false;
-    }
-    
-    m_sirilClient->closeImage();
-    return true;
-}
-
-bool StellinaProcessor::createMasterDark(const QStringList &darkFrames, const QString &outputPath) {
-    // This would create a master dark from multiple dark frames
-    // For now, just use the first dark frame
-    Q_UNUSED(darkFrames)
-    Q_UNUSED(outputPath)
-    return true;
 }
 
 // Astrometric stacking functions

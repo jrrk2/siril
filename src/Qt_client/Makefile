@@ -1,7 +1,7 @@
-run: Release/OriginSimulator.app/Contents/MacOS/OriginSimulator
+run: Release/StellinaProcessor.app/Contents/MacOS/StellinaProcessor
 	$<
 
-Release/OriginSimulator.app/Contents/MacOS/OriginSimulator: qmake
+Release/StellinaProcessor.app/Contents/MacOS/StellinaProcessor: qmake
 	xcodebuild
 
 qmake:

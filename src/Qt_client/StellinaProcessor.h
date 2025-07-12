@@ -119,9 +119,10 @@ private:
     
     // Dark calibration functions
     void scanDarkFrames();
-    bool findMatchingDarkFrame(const QString &lightFrame, DarkFrame &darkFrame);
+    bool findMatchingDarkFrame(const QString &lightFrame, DarkFrame &darkFrame); // Deprecated
+    QStringList findAllMatchingDarkFrames(int targetExposure, int targetTemperature, const QString &targetBinning);
     bool createMasterDark(const QStringList &darkFrames, const QString &outputPath);
-    bool applyDarkCalibration(const QString &lightFrame, const QString &darkFrame, const QString &outputFrame);
+    bool applyMasterDark(const QString &lightFrame, const QString &masterDark, const QString &outputFrame);
     int extractExposureTime(const QString &fitsFile);
     int extractTemperature(const QString &fitsFile);
     QString extractBinning(const QString &fitsFile);
@@ -185,7 +186,6 @@ private:
     QCheckBox *m_autoMatchDarksCheck;
     QSpinBox *m_temperatureToleranceSpin;
     QSpinBox *m_exposureToleranceSpin;
-    QCheckBox *m_createMasterDarkCheck;
     QTableWidget *m_darkFramesTable;
     
     // Stacking options group
@@ -269,7 +269,6 @@ private:
     bool m_autoMatchDarks;
     int m_temperatureTolerance;
     int m_exposureTolerance;
-    bool m_createMasterDark;
     
     // Stacking settings
     StackingParams m_stackingParams;

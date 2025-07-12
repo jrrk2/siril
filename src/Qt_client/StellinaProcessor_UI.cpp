@@ -214,9 +214,11 @@ void StellinaProcessor::setupDarkTab() {
     m_exposureToleranceSpin->setValue(10);
     darkOptionsLayout->addWidget(m_exposureToleranceSpin, 2, 1);
     
-    m_createMasterDarkCheck = new QCheckBox("Create master dark frames from multiple darks");
-    m_createMasterDarkCheck->setChecked(true);
-    darkOptionsLayout->addWidget(m_createMasterDarkCheck, 3, 0, 1, 2);
+    // Add info label about master dark creation
+    QLabel *masterDarkInfo = new QLabel("Master dark frames are automatically created from matching dark frames");
+    masterDarkInfo->setStyleSheet("color: gray; font-style: italic;");
+    masterDarkInfo->setWordWrap(true);
+    darkOptionsLayout->addWidget(masterDarkInfo, 3, 0, 1, 2);
     
     // Dark frames table
     QGroupBox *darkTableGroup = new QGroupBox("Available Dark Frames");

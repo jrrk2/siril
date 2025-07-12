@@ -70,9 +70,6 @@ void StellinaProcessor::connectSignals() {
     connect(m_exposureToleranceSpin, static_cast<void(QSpinBox::*)(int)>(&QSpinBox::valueChanged), [this](int value) {
         m_exposureTolerance = value;
     });
-    connect(m_createMasterDarkCheck, &QCheckBox::toggled, [this](bool checked) {
-        m_createMasterDark = checked;
-    });
     
     // Stacking settings
     connect(m_stackingMethodCombo, &QComboBox::currentTextChanged, [this](const QString &text) {

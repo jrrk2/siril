@@ -1,4 +1,11 @@
 #include "StellinaProcessor.h"
+#include <QApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QJsonObject>
+#include <QJsonDocument>
+#include <QDateTime>
+#include <QMessageBox>
 
 void StellinaProcessor::startStellinaProcessing() {
     if (!validateProcessingInputs()) {
@@ -165,31 +172,6 @@ void StellinaProcessor::processNextImage() {
     
     m_timeEstimateLabel->setText(QString("Estimated time remaining: %1")
                                     .arg(formatProcessingTime(remaining)));
-}
-
-bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
-    m_currentTaskLabel->setText("Dark calibration...");
-    
-    DarkFrame matchingDark;
-    if (!findMatchingDarkFrame(lightFrame, matchingDark)) {
-        logMessage("No matching dark frame found, skipping dark calibration", "orange");
-        m_skippedCount++;
-        return true; // Continue processing without dark calibration
-    }
-    
-    QString outputName = QString("dark_calibrated_%1.fits")
-                            .arg(QFileInfo(lightFrame).baseName());
-    QString outputPath = QDir(m_calibratedDirectory).absoluteFilePath(outputName);
-    
-    if (applyDarkCalibration(lightFrame, matchingDark.filepath, outputPath)) {
-        m_darkCalibratedFiles.append(outputPath);
-        m_darkCalibratedCount++;
-        logMessage(QString("Dark calibration successful: %1").arg(outputName), "green");
-        return true;
-    } else {
-        logMessage("Dark calibration failed", "red");
-        return false;
-    }
 }
 
 bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
@@ -421,7 +403,34 @@ void StellinaProcessor::finishProcessing() {
         break;
         
     case MODE_ASTROMETRIC_STACKING:
-      completionMessage += QString("Images processed:");
-      break;
+        completionMessage += QString("Images processed: %1, Errors: %2, Total: %3")
+                                .arg(m_processedCount)
+                                .arg(m_errorCount)
+                                .arg(m_imagesToProcess.length());
+        if (!m_finalStackedImage.isEmpty()) {
+            completionMessage += QString("\nFinal stack: %1").arg(QFileInfo(m_finalStackedImage).fileName());
+        }
+        break;
+        
+    case MODE_FULL_PIPELINE:
+        completionMessage += QString("Dark calibrated: %1, Plate solved: %2, Errors: %3, Total: %4")
+                                .arg(m_darkCalibratedCount)
+                                .arg(m_processedCount)
+                                .arg(m_errorCount)
+                                .arg(m_imagesToProcess.length());
+        if (!m_finalStackedImage.isEmpty()) {
+            completionMessage += QString("\nFinal stack: %1").arg(QFileInfo(m_finalStackedImage).fileName());
+        }
+        break;
     }
+    
+    logMessage(completionMessage, "green");
+    
+    // Save processing report
+    saveProcessingReport();
+    
+    updateUI();
+    
+    // Show completion dialog
+    QMessageBox::information(this, "Processing Complete", completionMessage);
 }
