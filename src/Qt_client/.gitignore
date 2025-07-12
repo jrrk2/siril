@@ -1,5 +1,6 @@
 .DS_Store
 .qmake.stash
 Debug/
+Release/
 StellinaProcessor.xcodeproj/
 build/

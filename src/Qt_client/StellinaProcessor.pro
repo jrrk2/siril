@@ -41,7 +41,11 @@ INCLUDEPATH += .
 # Source files
 SOURCES += \
     main.cpp \
-    StellinaProcessor.cpp \
+    StellinaProcessor_Core.cpp \
+    stellinaprocessor_plugin_import.cpp \
+    StellinaProcessor_Processing.cpp \
+    StellinaProcessor_Slots.cpp \
+    StellinaProcessor_UI.cpp \
     SirilClient.cpp
 
 # Header files

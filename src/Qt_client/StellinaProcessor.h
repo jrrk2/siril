@@ -67,8 +67,10 @@ public:
 private slots:
     // UI slots
     void onSelectSourceDirectory();
-    void onSelectOutputDirectory();
     void onSelectDarkDirectory();
+    void onSelectCalibratedDirectory();
+    void onSelectPlateSolvedDirectory();
+    void onSelectStackedDirectory();
     void onStartProcessing();
     void onStopProcessing();
     void onTestConnection();
@@ -99,6 +101,8 @@ private:
     void updateConnectionStatus();
     void updateProcessingStatus();
     void logMessage(const QString &message, const QString &color = "black");
+    void loadSettings();
+    void saveSettings();
     
     // Processing functions
     void startStellinaProcessing();
@@ -134,6 +138,7 @@ private:
     QString formatProcessingTime(qint64 milliseconds);
     bool validateProcessingInputs();
     void saveProcessingReport();
+    QString getOutputDirectoryForCurrentStage() const;
     
     // UI components - Main tabs
     QTabWidget *m_tabWidget;
@@ -156,10 +161,14 @@ private:
     QGroupBox *m_inputGroup;
     QLineEdit *m_sourceDirectoryEdit;
     QPushButton *m_selectSourceButton;
-    QLineEdit *m_outputDirectoryEdit;
-    QPushButton *m_selectOutputButton;
     QLineEdit *m_darkDirectoryEdit;
     QPushButton *m_selectDarkButton;
+    QLineEdit *m_calibratedDirectoryEdit;
+    QPushButton *m_selectCalibratedButton;
+    QLineEdit *m_plateSolvedDirectoryEdit;
+    QPushButton *m_selectPlateSolvedButton;
+    QLineEdit *m_stackedDirectoryEdit;
+    QPushButton *m_selectStackedButton;
     QLabel *m_darkFramesCount;
     QPushButton *m_refreshDarkButton;
     
@@ -244,10 +253,12 @@ private:
     };
     ProcessingStage m_currentStage;
     
-    // Settings
-    QString m_sourceDirectory;
-    QString m_outputDirectory;
-    QString m_darkDirectory;
+    // Settings - Updated to use multiple directories
+    QString m_sourceDirectory;        // Raw light frames
+    QString m_darkDirectory;         // Dark frames
+    QString m_calibratedDirectory;   // Dark-calibrated light frames
+    QString m_plateSolvedDirectory;  // Plate-solved light frames
+    QString m_stackedDirectory;      // Final stacked images
     bool m_qualityFilter;
     bool m_debugMode;
     double m_focalLength;
