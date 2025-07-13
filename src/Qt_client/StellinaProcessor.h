@@ -60,8 +60,9 @@ struct StackingParams {
     double drizzleScale;      // drizzle scale factor
     QString outputFormat;     // "fits", "tiff", "png"
 };
+// Update the StellinaImageData structure in StellinaProcessor.h
+// Replace the existing struct with this enhanced version:
 
-// Add before class declaration
 struct StellinaImageData {
     QString originalFitsPath;     // Original raw FITS file path
     QString originalJsonPath;     // Original JSON metadata file path  
@@ -70,13 +71,24 @@ struct StellinaImageData {
     double altitude;              // Stellina altitude (degrees)
     double azimuth;               // Stellina azimuth (degrees)
     QString dateObs;              // DATE-OBS from FITS header
-    bool hasValidCoordinates;     // Whether coordinates are valid
+    bool hasValidCoordinates;     // Whether Alt/Az coordinates are valid
     int exposureSeconds;          // Exposure time in seconds
     int temperatureKelvin;        // Sensor temperature in Kelvin
     QString binning;              // Binning mode (e.g., "1x1", "2x2")
     
+    // NEW: Pre-calculated RA/DEC coordinates from coordinate conversion
+    double calculatedRA;          // Calculated RA from Alt/Az conversion (degrees)
+    double calculatedDec;         // Calculated Dec from Alt/Az conversion (degrees)
+    bool hasCalculatedCoords;     // Whether calculated coordinates are available
+    
     StellinaImageData() : altitude(0), azimuth(0), hasValidCoordinates(false), 
-                         exposureSeconds(0), temperatureKelvin(284), binning("1x1") {}
+                         exposureSeconds(0), temperatureKelvin(284), binning("1x1"),
+                         calculatedRA(0), calculatedDec(0), hasCalculatedCoords(false) {}
+    
+    // Convenience function to check if pre-calculated coordinates are available
+    bool hasPreCalculatedCoords() const {
+        return hasCalculatedCoords && calculatedRA != 0.0 && calculatedDec != 0.0;
+    }
 };
 
 class StellinaProcessor : public QMainWindow {
@@ -327,7 +339,7 @@ private:
     QList<StellinaImageData> m_stellinaImageData;  // Tracks metadata through pipeline
 
     // Add to private function declarations
-    bool writeStellinaMetadataToFits(const QString &fitsPath, const StellinaImageData &imageData);
+    bool writeStellinaMetadataWithCoordinates(const QString &fitsPath, const StellinaImageData &imageData);
     bool readStellinaMetadataFromFits(const QString &fitsPath, StellinaImageData &imageData);
     bool updateProcessingStage(const QString &fitsPath, const QString &stage);
     bool cleanExistingStellinaKeywords(const QString &fitsPath);

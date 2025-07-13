@@ -1882,8 +1882,8 @@ bool StellinaProcessor::cleanExistingStellinaKeywords(const QString &fitsPath) {
     return (status == 0);
 }
 
-// Function to write Stellina metadata to FITS headers
-bool StellinaProcessor::writeStellinaMetadataToFits(const QString &fitsPath, const StellinaImageData &imageData) {
+// Enhanced function to write both Alt/Az AND converted RA/DEC to FITS headers
+bool StellinaProcessor::writeStellinaMetadataWithCoordinates(const QString &fitsPath, const StellinaImageData &imageData) {
     fitsfile *fptr = nullptr;
     int status = 0;
     
@@ -1903,14 +1903,53 @@ bool StellinaProcessor::writeStellinaMetadataToFits(const QString &fitsPath, con
         return false;
     }
     
-    // Write Stellina-specific keywords with our standardized names
+    // Write original Stellina Alt/Az coordinates
     double alt = imageData.altitude;
     double az = imageData.azimuth;
     
     if (fits_write_key(fptr, TDOUBLE, "STELLALT", &alt, "Stellina altitude (degrees)", &status) ||
         fits_write_key(fptr, TDOUBLE, "STELLAZ", &az, "Stellina azimuth (degrees)", &status)) {
-        logMessage("Warning: Could not write Stellina coordinates to FITS header", "orange");
+        logMessage("Warning: Could not write Stellina Alt/Az coordinates to FITS header", "orange");
         status = 0; // Continue anyway
+    }
+    
+    // Convert Alt/Az to RA/DEC and write to header
+    double ra, dec;
+    if (imageData.hasValidCoordinates && !imageData.dateObs.isEmpty()) {
+        if (convertAltAzToRaDec(imageData.altitude, imageData.azimuth, imageData.dateObs, ra, dec)) {
+            // Write calculated RA/DEC coordinates
+            if (fits_write_key(fptr, TDOUBLE, "STELLRA", &ra, "Calculated RA from Alt/Az (degrees)", &status) ||
+                fits_write_key(fptr, TDOUBLE, "STELLDEC", &dec, "Calculated Dec from Alt/Az (degrees)", &status)) {
+                logMessage("Warning: Could not write calculated RA/DEC to FITS header", "orange");
+                status = 0;
+            } else {
+                if (m_debugMode) {
+                    logMessage(QString("Wrote calculated coordinates: RA=%1°, Dec=%2°")
+                                  .arg(ra, 0, 'f', 6).arg(dec, 0, 'f', 6), "gray");
+                }
+                
+                // Write coordinate conversion metadata
+                QString obsLocation = m_observerLocation;
+                QByteArray locationBytes = obsLocation.toLocal8Bit();
+                char* locationPtr = locationBytes.data();
+                if (fits_write_key(fptr, TSTRING, "OBSLOC", &locationPtr, "Observer location for coordinate conversion", &status)) {
+                    logMessage("Warning: Could not write observer location", "orange");
+                    status = 0;
+                }
+                
+                QString conversion_method = "Alt/Az to RA/Dec from Stellina mount position";
+                QByteArray methodBytes = conversion_method.toLocal8Bit();
+                char* methodPtr = methodBytes.data();
+                if (fits_write_key(fptr, TSTRING, "COORDMET", &methodPtr, "Mount coordinate conversion method", &status)) {
+                    logMessage("Warning: Could not write conversion method", "orange");
+                    status = 0;
+                }
+            }
+        } else {
+            logMessage("Warning: Failed to convert Alt/Az to RA/DEC during metadata writing", "orange");
+        }
+    } else {
+        logMessage("Warning: Cannot convert coordinates - missing valid Alt/Az or observation time", "orange");
     }
     
     // Write original file paths (relative names only for portability)
@@ -1939,7 +1978,7 @@ bool StellinaProcessor::writeStellinaMetadataToFits(const QString &fitsPath, con
     }
     
     // Write processing stage
-    QString processingStage = "RAW";
+    QString processingStage = "COORDINATES_CALCULATED";
     QByteArray stageBytes = processingStage.toLocal8Bit();
     char* stagePtr = stageBytes.data();
     
@@ -1958,11 +1997,13 @@ bool StellinaProcessor::writeStellinaMetadataToFits(const QString &fitsPath, con
         status = 0;
     }
     
-    // Add processing history
-    QString historyComment = QString("Stellina metadata embedded: Alt=%.2f°, Az=%.2f°, Exp=%1s")
+    // Add comprehensive processing history
+    QString historyComment = QString("Stellina mount coordinates: Alt=%.2f°, Az=%.2f°, Est_RA=%.6f°, Est_Dec=%.6f°, Exp=%1s")
                                 .arg(exposure)
                                 .arg(imageData.altitude)
-                                .arg(imageData.azimuth);
+                                .arg(imageData.azimuth)
+                                .arg(ra)
+                                .arg(dec);
     QByteArray historyBytes = historyComment.toLocal8Bit();
     if (fits_write_history(fptr, historyBytes.data(), &status)) {
         // Non-critical error
@@ -1978,13 +2019,12 @@ bool StellinaProcessor::writeStellinaMetadataToFits(const QString &fitsPath, con
     }
     
     if (m_debugMode) {
-        logMessage(QString("Wrote Stellina metadata to: %1").arg(QFileInfo(fitsPath).fileName()), "gray");
+        logMessage(QString("Wrote complete Stellina metadata with mount coordinates to: %1").arg(QFileInfo(fitsPath).fileName()), "gray");
     }
     
     return true;
 }
 
-// Function to read Stellina metadata from FITS headers
 bool StellinaProcessor::readStellinaMetadataFromFits(const QString &fitsPath, StellinaImageData &imageData) {
     fitsfile *fptr = nullptr;
     int status = 0;
@@ -1995,7 +2035,7 @@ bool StellinaProcessor::readStellinaMetadataFromFits(const QString &fitsPath, St
         return false;
     }
     
-    // Read Stellina coordinates
+    // Read Stellina Alt/Az coordinates
     double alt, az;
     if (fits_read_key(fptr, TDOUBLE, "STELLALT", &alt, nullptr, &status) == 0 &&
         fits_read_key(fptr, TDOUBLE, "STELLAZ", &az, nullptr, &status) == 0) {
@@ -2003,13 +2043,37 @@ bool StellinaProcessor::readStellinaMetadataFromFits(const QString &fitsPath, St
         imageData.azimuth = az;
         imageData.hasValidCoordinates = true;
     } else {
-        logMessage(QString("No Stellina coordinates found in FITS header: %1").arg(QFileInfo(fitsPath).fileName()), "orange");
-        fits_close_file(fptr, &status);
-        return false;
+        logMessage(QString("No Stellina Alt/Az coordinates found in FITS header: %1").arg(QFileInfo(fitsPath).fileName()), "orange");
+    }
+    
+    // NEW: Try to read pre-calculated RA/DEC coordinates
+    double stellra, stelldec;
+    status = 0; // Reset status
+    bool hasPreCalculatedCoords = false;
+    
+    if (fits_read_key(fptr, TDOUBLE, "STELLRA", &stellra, nullptr, &status) == 0) {
+        status = 0; // Reset for next read
+        if (fits_read_key(fptr, TDOUBLE, "STELLDEC", &stelldec, nullptr, &status) == 0) {
+            // Store the pre-calculated coordinates in the imageData structure
+            imageData.calculatedRA = stellra;
+            imageData.calculatedDec = stelldec;
+            imageData.hasCalculatedCoords = true;
+            hasPreCalculatedCoords = true;
+            
+            if (m_debugMode) {
+                logMessage(QString("Read pre-calculated coordinates from FITS: RA=%1°, Dec=%2°")
+                              .arg(stellra, 0, 'f', 6).arg(stelldec, 0, 'f', 6), "gray");
+            }
+        }
+    }
+    
+    if (!hasPreCalculatedCoords && m_debugMode) {
+        logMessage(QString("No pre-calculated RA/DEC found in FITS header: %1").arg(fitsPath), "gray");
     }
     
     // Read exposure and temperature
     int exposure, temperature;
+    status = 0;
     if (fits_read_key(fptr, TINT, "STELLEXP", &exposure, nullptr, &status) == 0) {
         imageData.exposureSeconds = exposure;
     }
@@ -2045,16 +2109,20 @@ bool StellinaProcessor::readStellinaMetadataFromFits(const QString &fitsPath, St
     fits_close_file(fptr, &status);
     
     if (m_debugMode) {
-        logMessage(QString("Read Stellina metadata from: %1 (Alt=%.2f°, Az=%.2f°)")
+        QString coordInfo = hasPreCalculatedCoords ? 
+            QString("with pre-calculated RA/Dec") : 
+            QString("Alt/Az only");
+        logMessage(QString("Read Stellina metadata from: %1 (Alt=%.2f°, Az=%.2f°) %2")
                       .arg(QFileInfo(fitsPath).fileName())
                       .arg(imageData.altitude)
-                      .arg(imageData.azimuth), "gray");
+                      .arg(imageData.azimuth)
+                      .arg(coordInfo), "gray");
     }
     
     return true;
 }
 
-// Modified dark calibration function
+// Modified processImageDarkCalibration function
 bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
     m_currentTaskLabel->setText("Dark calibration...");
     
@@ -2094,9 +2162,9 @@ bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
         logMessage(QString("No matching dark frames found for exposure=%1s, temp=%2K (%3°C), binning=%4")
                       .arg(lightExposure).arg(lightTemperatureK).arg(temperatureC).arg(lightBinning), "orange");
         
-        // Write metadata to original file even if no dark calibration is performed
-        if (!writeStellinaMetadataToFits(lightFrame, imageData)) {
-            logMessage("Failed to write metadata to original FITS file", "red");
+        // IMPORTANT: Even without dark calibration, write metadata WITH coordinate conversion
+        if (!writeStellinaMetadataWithCoordinates(lightFrame, imageData)) {
+            logMessage("Failed to write metadata with coordinates to original FITS file", "red");
         }
         
         m_skippedCount++;
@@ -2130,15 +2198,16 @@ bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
     QString outputPath = QDir(m_calibratedDirectory).absoluteFilePath(outputName);
     
     if (applyMasterDark(lightFrame, masterDarkPath, outputPath)) {
-        // Write Stellina metadata to the calibrated file
+        // IMPORTANT: Write Stellina metadata WITH coordinate conversion to the calibrated file
         StellinaImageData calibratedImageData = imageData;
         calibratedImageData.currentFitsPath = outputPath;
         
-        if (!writeStellinaMetadataToFits(outputPath, calibratedImageData)) {
-            logMessage("Warning: Failed to write metadata to calibrated FITS file", "orange");
+        if (!writeStellinaMetadataWithCoordinates(outputPath, calibratedImageData)) {
+            logMessage("Warning: Failed to write metadata with coordinates to calibrated FITS file", "orange");
         } else {
             // Update processing stage in the metadata
-            updateProcessingStage(outputPath, "DARK_CALIBRATED");
+            updateProcessingStage(outputPath, "DARK_CALIBRATED_WITH_COORDS");
+            logMessage(QString("Wrote dark-calibrated file with RA/DEC coordinates: %1").arg(QFileInfo(outputPath).fileName()), "green");
         }
         
         // Update the tracking data structure
@@ -2151,7 +2220,7 @@ bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
         
         m_darkCalibratedFiles.append(outputPath);
         m_darkCalibratedCount++;
-        logMessage(QString("Dark calibration successful: %1").arg(outputName), "green");
+        logMessage(QString("Dark calibration with coordinate conversion successful: %1").arg(outputName), "green");
         return true;
     } else {
         logMessage("Dark calibration failed", "red");
@@ -2159,7 +2228,6 @@ bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
     }
 }
 
-// Modified plate solving function
 bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
     m_currentTaskLabel->setText("Plate solving...");
     
@@ -2190,10 +2258,34 @@ bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
         return false;
     }
     
-    // Convert Alt/Az to RA/Dec using metadata
+    // Use pre-calculated coordinates if available, otherwise convert Alt/Az to RA/Dec
     double ra, dec;
-    if (!convertAltAzToRaDec(imageData.altitude, imageData.azimuth, imageData.dateObs, ra, dec)) {
-        logMessage("Failed to convert coordinates", "red");
+    bool coordsReady = false;
+    
+    if (imageData.hasPreCalculatedCoords()) {
+        // Use the pre-calculated coordinates from FITS header
+        ra = imageData.calculatedRA;
+        dec = imageData.calculatedDec;
+        coordsReady = true;
+        
+        logMessage(QString("Using pre-calculated coordinates from FITS: RA=%1°, Dec=%2°")
+                      .arg(ra, 0, 'f', 4).arg(dec, 0, 'f', 4), "blue");
+    } else {
+        // Fall back to converting Alt/Az to RA/Dec
+        logMessage("No pre-calculated coordinates found, converting Alt/Az to RA/Dec...", "orange");
+        
+        if (convertAltAzToRaDec(imageData.altitude, imageData.azimuth, imageData.dateObs, ra, dec)) {
+            coordsReady = true;
+            logMessage(QString("Converted coordinates: RA=%1°, Dec=%2°")
+                          .arg(ra, 0, 'f', 4).arg(dec, 0, 'f', 4), "blue");
+        } else {
+            logMessage("Failed to convert coordinates", "red");
+            return false;
+        }
+    }
+    
+    if (!coordsReady) {
+        logMessage("No usable coordinates available for plate solving", "red");
         return false;
     }
     
@@ -2224,42 +2316,22 @@ bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
         usedMethod = "solve-field";
         logMessage("solve-field plate solving succeeded!", "green");
     } else {
-        logMessage("solve-field failed, trying Siril fallback...", "orange");
-        
-        // Fallback to Siril
-        if (m_sirilClient->isConnected()) {
-            if (m_sirilClient->loadImage(plateSolvingImage)) {
-                double plateSolvingPixelSize = (plateSolvingImage == binnedPath) ? m_pixelSize * 2.0 : m_pixelSize;
-                platesolveSuccess = m_sirilClient->platesolve(ra, dec, m_focalLength, plateSolvingPixelSize, true);
-                
-                if (platesolveSuccess) {
-                    usedMethod = "Siril (fallback)";
-                    logMessage("Siril fallback plate solving succeeded!", "green");
-                    
-                    if (!m_sirilClient->saveImage(outputPath)) {
-                        logMessage("Failed to save Siril processed image", "red");
-                        m_sirilClient->closeImage();
-                        return false;
-                    }
-                } else {
-                    logMessage(QString("Siril fallback also failed: %1").arg(m_sirilClient->lastError()), "red");
-                }
-                
-                m_sirilClient->closeImage();
-            }
-        }
+        logMessage("solve-field failed");
     }
     
     if (!platesolveSuccess) {
-        logMessage("Both solve-field and Siril failed to plate solve image", "red");
+        logMessage("Plate solving failed", "red");
         return false;
     }
     
-    // Write metadata to plate-solved file
+    // Write metadata to plate-solved file (including the coordinates we used)
     StellinaImageData plateSolvedImageData = imageData;
     plateSolvedImageData.currentFitsPath = outputPath;
+    // Keep the coordinates we used for plate solving
+    plateSolvedImageData.calculatedRA = ra;
+    plateSolvedImageData.calculatedDec = dec;
     
-    if (!writeStellinaMetadataToFits(outputPath, plateSolvedImageData)) {
+    if (!writeStellinaMetadataWithCoordinates(outputPath, plateSolvedImageData)) {
         logMessage("Warning: Failed to write metadata to plate-solved FITS file", "orange");
     } else {
         updateProcessingStage(outputPath, "PLATE_SOLVED");
@@ -2269,6 +2341,8 @@ bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
     for (int i = 0; i < m_stellinaImageData.size(); ++i) {
         if (m_stellinaImageData[i].originalFitsPath == imageData.originalFitsPath) {
             m_stellinaImageData[i].currentFitsPath = outputPath;
+            m_stellinaImageData[i].calculatedRA = ra;
+            m_stellinaImageData[i].calculatedDec = dec;
             break;
         }
     }
