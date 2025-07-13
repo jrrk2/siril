@@ -157,6 +157,11 @@ private:
     double calculateJD(int year, int month, int day, int hour, int minute, int second);
     double calculateLST(double JD, double longitude);
     void altAzToRaDec(double alt, double az, double lat, double lst, double &ra, double &dec);
+    bool runSolveField(const QString &fitsPath, const QString &outputPath, double ra, double dec);
+    bool checkSolveFieldInstalled();
+    bool createBinnedImageForPlatesolving(const QString &inputPath, const QString &binnedPath);
+    bool performCFABinning(const std::vector<float> &inputPixels, std::vector<float> &binnedPixels, 
+			   long width, long height, long &binnedWidth, long &binnedHeight);
 
     // UI components - Main tabs
     QTabWidget *m_tabWidget;

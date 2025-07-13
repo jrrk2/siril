@@ -16,6 +16,9 @@ SirilClient::SirilClient(QObject *parent)
     , m_socket(new QLocalSocket(this))
     , m_connectionTimer(new QTimer(this))
     , m_connected(false)
+    , m_useCLI(false)  // Add this
+    , m_commandPipe(nullptr)  // Add this
+    , m_responsePipe(nullptr)  // Add this
 {
     // Set up connection timer
     m_connectionTimer->setSingleShot(true);
@@ -36,18 +39,177 @@ SirilClient::~SirilClient() {
     disconnectFromSiril();
 }
 
+bool SirilClient::connectToCLI() {
+    m_commandPipePath = "/tmp/siril_command.in";
+    m_responsePipePath = "/tmp/siril_command.out";
+    
+    // Check if siril-cli is running by checking for pipes
+    if (!QFile::exists(m_commandPipePath) || !QFile::exists(m_responsePipePath)) {
+        setError("siril-cli not running. Start with: siril-cli");
+        return false;
+    }
+    
+    // Open command pipe for writing
+    m_commandPipe = new QFile(m_commandPipePath, this);
+    if (!m_commandPipe->open(QIODevice::WriteOnly)) {
+        setError(QString("Failed to open command pipe: %1").arg(m_commandPipePath));
+        return false;
+    }
+    
+    // Open response pipe for reading
+    m_responsePipe = new QFile(m_responsePipePath, this);
+    if (!m_responsePipe->open(QIODevice::ReadOnly)) {
+        setError(QString("Failed to open response pipe: %1").arg(m_responsePipePath));
+        m_commandPipe->close();
+        return false;
+    }
+    
+    m_connected = true;
+    m_useCLI = true;
+    
+    qDebug() << "Connected to siril-cli via named pipes";
+    return true;
+}
+
+
+bool SirilClient::waitForPlatesolvingResult() {
+    if (!m_responsePipe) {
+        return false;
+    }
+    
+    QElapsedTimer timer;
+    timer.start();
+    const int PLATESOLVE_TIMEOUT = 30000; // 30 seconds
+    
+    QTextStream in(m_responsePipe);
+    QString line;
+    
+    // Read response lines until we get a result
+    while (timer.elapsed() < PLATESOLVE_TIMEOUT) {
+        if (m_responsePipe->bytesAvailable() > 0 || m_responsePipe->waitForReadyRead(100)) {
+            while (in.readLineInto(&line)) {
+                qDebug() << "siril-cli response:" << line;
+                
+                // Check for success indicators
+                if (line.contains("log: Siril solve succeeded")) {
+                    qDebug() << "Plate solving succeeded!";
+                    return true;
+                }
+                
+                // Check for failure indicators
+                if (line.contains("log: Plate solving failed") || 
+                    line.contains("could not be aligned with the reference stars") ||
+                    line.contains("Transformation matrix is invalid")) {
+                    qDebug() << "Plate solving failed:" << line;
+                    setError(QString("Plate solving failed: %1").arg(line));
+                    return false;
+                }
+                
+                // Check for other error conditions
+                if (line.contains("Error") || line.contains("error")) {
+                    qDebug() << "Possible error:" << line;
+                    // Don't fail immediately - might be a warning
+                }
+            }
+        }
+        
+        QApplication::processEvents(); // Keep UI responsive
+        
+        // Check if user wants to stop
+        if (!m_connected) {
+            return false;
+        }
+    }
+    
+    // Timeout - assume failure
+    setError("Timeout waiting for plate solving result");
+    return false;
+}
+
+bool SirilClient::sendCLICommand(const QString &command) {
+    if (!m_connected || !m_commandPipe) {
+        setError("Not connected to siril-cli");
+        return false;
+    }
+    
+    qDebug() << "Sending CLI command:" << command;
+    
+    // Write command to pipe
+    QTextStream out(m_commandPipe);
+    out << command << "\n";
+    out.flush();
+    
+    if (!m_commandPipe->flush()) {
+        setError("Failed to flush command to pipe");
+        return false;
+    }
+    
+    // For plate solving commands, we need to check if it actually succeeded
+    if (command.startsWith("platesolve")) {
+        return waitForPlatesolvingResult();
+    }
+    
+    // For other commands, assume success if write worked
+    return true;
+}
+
+
+// Update sendSirilCommand to use CLI when available
+bool SirilClient::sendSirilCommand(const QString &command) {
+    if (m_useCLI) {
+        return sendCLICommand(command);
+    } else {
+        // Use existing socket protocol
+        QByteArray payload = command.toUtf8();
+        auto result = sendCommand(CMD_SEND_COMMAND, payload);
+        bool success = (result.first == STATUS_OK);
+        emit commandExecuted(command, success);
+        return success;
+    }
+}
+
+// Update disconnectFromSiril
+void SirilClient::disconnectFromSiril() {
+    if (m_useCLI) {
+        if (m_commandPipe) {
+            m_commandPipe->close();
+            m_commandPipe = nullptr;
+        }
+        if (m_responsePipe) {
+            m_responsePipe->close();
+            m_responsePipe = nullptr;
+        }
+    } else {
+        // Existing socket disconnection
+        if (m_socket->state() != QLocalSocket::UnconnectedState) {
+            m_socket->disconnectFromServer();
+            m_socket->waitForDisconnected(3000);
+        }
+    }
+    m_connected = false;
+}
+// Update the main connectToSiril function
 bool SirilClient::connectToSiril() {
     if (m_connected) {
         return true;
     }
     
+    // Try CLI first (more stable)
+    if (connectToCLI()) {
+        emit connected();
+        return true;
+    }
+    
+    // Fall back to socket connection
     QString socketPath = findSirilSocket();
     if (socketPath.isEmpty()) {
-        setError("Could not find Siril socket. Is Siril running?\n"
-                "Expected socket path like: /tmp/siril_XXXXX.sock");
+        setError("Could not find Siril socket and siril-cli not available.\n"
+                "Start Siril GUI or run: siril-cli");
         return false;
     }
     
+    // Rest of existing socket connection code...
+    m_useCLI = false;
     qDebug() << "Connecting to Siril at:" << socketPath;
     
     // Verify the socket file exists and is accessible
@@ -68,14 +230,6 @@ bool SirilClient::connectToSiril() {
     m_socket->connectToServer(socketPath);
     
     return m_socket->waitForConnected(5000);
-}
-
-void SirilClient::disconnectFromSiril() {
-    if (m_socket->state() != QLocalSocket::UnconnectedState) {
-        m_socket->disconnectFromServer();
-        m_socket->waitForDisconnected(3000);
-    }
-    m_connected = false;
 }
 
 QString SirilClient::findSirilSocket() {
@@ -326,26 +480,6 @@ bool SirilClient::platesolve(double ra, double dec, double focal, double pixelSi
     }
     
     return sendSirilCommand(command);
-}
-
-bool SirilClient::sendSirilCommand(const QString &command) {
-    QByteArray payload = command.toUtf8();
-    qDebug() << "Sending Siril command:" << command;
-    qDebug() << "Payload size:" << payload.size();
-    
-    auto result = sendCommand(CMD_SEND_COMMAND, payload);
-    
-    bool success = (result.first == STATUS_OK);
-    
-    qDebug() << "Command result - Status:" << result.first << "Response size:" << result.second.size();
-    
-    emit commandExecuted(command, success);
-    
-    if (!success && !result.second.isEmpty()) {
-        setError(QString::fromUtf8(result.second));
-    }
-    
-    return success;
 }
 
 // Private slots

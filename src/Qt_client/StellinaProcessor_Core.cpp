@@ -1049,6 +1049,29 @@ bool StellinaProcessor::applyMasterDark(const QString &lightFrame, const QString
     }
     
     logMessage(QString("Dark calibration successful: %1").arg(QFileInfo(outputFrame).fileName()), "green");
+    
+    // After successful dark subtraction, create binned version for plate solving
+    QString binnedName = QString("binned_%1").arg(QFileInfo(outputFrame).fileName());
+    QString binnedPath = QDir(QFileInfo(outputFrame).dir()).absoluteFilePath(binnedName);
+    
+    if (createBinnedImageForPlatesolving(outputFrame, binnedPath)) {
+        logMessage(QString("Created binned image for plate solving: %1").arg(QFileInfo(binnedPath).fileName()), "green");
+        
+        // Store both paths for later use
+        QString originalPath = outputFrame;
+        m_darkCalibratedFiles.append(originalPath);
+        
+        // Create a mapping of original->binned for plate solving use
+        // You might want to add a member variable like: QMap<QString, QString> m_binnedImageMap;
+        // m_binnedImageMap[originalPath] = binnedPath;
+        
+        return true;
+    } else {
+        logMessage("Failed to create binned image, will use original for plate solving", "orange");
+        m_darkCalibratedFiles.append(outputFrame);
+        return true; // Don't fail the whole process
+    }
+
     return true;
 }
 
@@ -1693,4 +1716,164 @@ void StellinaProcessor::testSingleConversion(const QString &testName,
     m_observerLocation = savedLocation;
     
     logMessage("", "gray");  // Blank line for separation
+}
+
+bool StellinaProcessor::performCFABinning(const std::vector<float> &inputPixels, std::vector<float> &binnedPixels,
+                                         long width, long height, long &binnedWidth, long &binnedHeight) {
+    // Ensure dimensions are even for 2x2 binning
+    if (width % 2 != 0 || height % 2 != 0) {
+        logMessage("Image dimensions must be even for 2x2 CFA binning", "red");
+        return false;
+    }
+    
+    binnedWidth = width / 2;
+    binnedHeight = height / 2;
+    binnedPixels.resize(binnedWidth * binnedHeight);
+    
+    if (m_debugMode) {
+        logMessage(QString("CFA binning: %1x%2 → %3x%4").arg(width).arg(height).arg(binnedWidth).arg(binnedHeight), "gray");
+    }
+    
+    // Perform 2x2 CFA binning - add all 4 pixels in each 2x2 block and scale down
+    // For Stellina RGGB pattern: R G
+    //                            G B
+    for (long y = 0; y < binnedHeight; ++y) {
+        for (long x = 0; x < binnedWidth; ++x) {
+            long srcY = y * 2;
+            long srcX = x * 2;
+            
+            // Get the 4 pixels from the 2x2 block
+            long idx00 = srcY * width + srcX;         // R (top-left)
+            long idx01 = srcY * width + (srcX + 1);   // G (top-right)  
+            long idx10 = (srcY + 1) * width + srcX;   // G (bottom-left)
+            long idx11 = (srcY + 1) * width + (srcX + 1); // B (bottom-right)
+            
+            // Add all 4 pixels and scale down by 4 to prevent overflow
+            // This preserves the proper intensity levels for 16-bit FITS
+            float binnedValue = (inputPixels[idx00] + inputPixels[idx01] + 
+                               inputPixels[idx10] + inputPixels[idx11]) / 4.0f;
+            
+            long binnedIdx = y * binnedWidth + x;
+            binnedPixels[binnedIdx] = binnedValue;
+        }
+    }
+    
+    return true;
+}
+
+bool StellinaProcessor::createBinnedImageForPlatesolving(const QString &inputPath, const QString &binnedPath) {
+    logMessage(QString("Creating 2x2 binned image for plate solving: %1").arg(QFileInfo(binnedPath).fileName()), "blue");
+    
+    fitsfile *inputFits = nullptr;
+    fitsfile *outputFits = nullptr;
+    int status = 0;
+    
+    // Open input FITS file
+    QByteArray inputPathBytes = inputPath.toLocal8Bit();
+    if (fits_open_file(&inputFits, inputPathBytes.data(), READONLY, &status)) {
+        logMessage(QString("Failed to open input FITS: %1 (error: %2)").arg(inputPath).arg(status), "red");
+        return false;
+    }
+    
+    // Get image dimensions
+    long naxes[2];
+    if (fits_get_img_size(inputFits, 2, naxes, &status)) {
+        logMessage(QString("Failed to get image dimensions (error: %1)").arg(status), "red");
+        fits_close_file(inputFits, &status);
+        return false;
+    }
+    
+    long width = naxes[0];
+    long height = naxes[1];
+    long totalPixels = width * height;
+    
+    // Read input pixel data
+    std::vector<float> inputPixels(totalPixels);
+    long firstPixel = 1;
+    if (fits_read_img(inputFits, TFLOAT, firstPixel, totalPixels, nullptr, 
+                     inputPixels.data(), nullptr, &status)) {
+        logMessage(QString("Failed to read input pixel data (error: %1)").arg(status), "red");
+        fits_close_file(inputFits, &status);
+        return false;
+    }
+    
+    // Perform CFA-aware 2x2 binning
+    std::vector<float> binnedPixels;
+    long binnedWidth, binnedHeight;
+    
+    if (!performCFABinning(inputPixels, binnedPixels, width, height, binnedWidth, binnedHeight)) {
+        fits_close_file(inputFits, &status);
+        return false;
+    }
+    
+    // Create output FITS file
+    QByteArray outputPathBytes = QString("!%1").arg(binnedPath).toLocal8Bit(); // ! forces overwrite
+    if (fits_create_file(&outputFits, outputPathBytes.data(), &status)) {
+        logMessage(QString("Failed to create binned FITS: %1 (error: %2)").arg(binnedPath).arg(status), "red");
+        fits_close_file(inputFits, &status);
+        return false;
+    }
+    
+    // Copy header from input, but update dimensions
+    if (fits_copy_header(inputFits, outputFits, &status)) {
+        logMessage(QString("Failed to copy FITS header (error: %1)").arg(status), "red");
+        fits_close_file(inputFits, &status);
+        fits_close_file(outputFits, &status);
+        return false;
+    }
+    
+    // Update NAXIS1 and NAXIS2 for binned dimensions
+    if (fits_update_key(outputFits, TLONG, "NAXIS1", &binnedWidth, "Binned image width", &status) ||
+        fits_update_key(outputFits, TLONG, "NAXIS2", &binnedHeight, "Binned image height", &status)) {
+        logMessage("Warning: Could not update image dimensions in header", "orange");
+        status = 0; // Continue anyway
+    }
+    
+    // Write binned pixel data
+    long binnedTotalPixels = binnedWidth * binnedHeight;
+    if (fits_write_img(outputFits, TFLOAT, firstPixel, binnedTotalPixels, 
+                      binnedPixels.data(), &status)) {
+        logMessage(QString("Failed to write binned pixel data (error: %1)").arg(status), "red");
+        fits_close_file(inputFits, &status);
+        fits_close_file(outputFits, &status);
+        QFile::remove(binnedPath);
+        return false;
+    }
+    
+    // Add processing history
+    QString historyComment = QString("CFA-aware 2x2 binning with /4 scaling for plate solving (%1x%2 -> %3x%4)")
+                                .arg(width).arg(height).arg(binnedWidth).arg(binnedHeight);
+    QByteArray historyBytes = historyComment.toLocal8Bit();
+    if (fits_write_history(outputFits, historyBytes.data(), &status)) {
+        logMessage("Warning: Could not write binning history", "orange");
+        status = 0;
+    }
+    
+    // Add custom keywords
+    QString purposeStr = "PLATESOLVE";
+    QByteArray purposeBytes = purposeStr.toLocal8Bit();
+    char* purposePtr = purposeBytes.data();
+    if (fits_write_key(outputFits, TSTRING, "PURPOSE", &purposePtr, "Binned for plate solving", &status)) {
+        logMessage("Warning: Could not write PURPOSE keyword", "orange");
+        status = 0;
+    }
+    
+    int binFactor = 2;
+    if (fits_write_key(outputFits, TINT, "BINNING", &binFactor, "CFA binning factor", &status)) {
+        logMessage("Warning: Could not write BINNING keyword", "orange");
+        status = 0;
+    }
+    
+    fits_close_file(inputFits, &status);
+    fits_close_file(outputFits, &status);
+    
+    if (status != 0) {
+        logMessage(QString("FITS error during binned image creation (error: %1)").arg(status), "red");
+        QFile::remove(binnedPath);
+        return false;
+    }
+    
+    logMessage(QString("Created binned image: %1 (%2x%3 pixels)")
+                  .arg(QFileInfo(binnedPath).fileName()).arg(binnedWidth).arg(binnedHeight), "green");
+    return true;
 }

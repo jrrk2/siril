@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QPair>
 #include <QTimer>
+#include <QFile>
 
 // Command IDs from Siril
 enum SirilCommand {
@@ -77,7 +78,8 @@ public:
     bool connectToSiril();
     void disconnectFromSiril();
     bool isConnected() const { return m_connected; }
-    
+    bool isUsingCLI() const { return m_useCLI; }
+  
     // High-level Siril operations for Stellina processing
     QString getWorkingDirectory();
     bool isImageLoaded();
@@ -111,13 +113,22 @@ private:
     QTimer *m_connectionTimer;
     bool m_connected;
     QString m_lastError;
+    bool m_useCLI;
+    QFile *m_commandPipe;
+    QFile *m_responsePipe;
+    QString m_commandPipePath;
+    QString m_responsePipePath;
+    
+    bool connectToCLI();
+    bool sendCLICommand(const QString &command);
     
     // Protocol helpers
     QString findSirilSocket();
     QPair<int, QByteArray> sendCommand(int commandId, const QByteArray &payload = QByteArray());
     QByteArray createCommandHeader(int commandId, int payloadLength);
     QPair<int, QByteArray> readResponse();
-    
+    bool waitForPlatesolvingResult();
+  
     void setError(const QString &error);
 };
 

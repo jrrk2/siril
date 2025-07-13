@@ -359,9 +359,11 @@ void StellinaProcessor::updateUI() {
     updateConnectionStatus();
 }
 
+// Update UI to show connection type
 void StellinaProcessor::updateConnectionStatus() {
     if (m_sirilClient->isConnected()) {
-        m_connectionStatus->setText("Connected to Siril");
+        QString connectionType = m_sirilClient->isUsingCLI() ? "siril-cli" : "Siril GUI";
+        m_connectionStatus->setText(QString("Connected to %1").arg(connectionType));
         m_connectionStatus->setStyleSheet("color: green; font-weight: bold;");
         m_testConnectionButton->setText("Disconnect");
     } else {
