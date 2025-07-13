@@ -144,7 +144,20 @@ private:
     bool validateProcessingInputs();
     void saveProcessingReport();
     QString getOutputDirectoryForCurrentStage() const;
-    
+    bool applyMasterDarkDirect(const QString &lightFrame, const QString &masterDark, const QString &outputFrame);
+    bool parseObserverLocation(const QString &location, double &lat, double &lon, double &elevation);
+    QString extractDateObs(const QString &fitsFile);
+    void testLibnovaConversion();
+    void testSingleConversion(const QString &testName,
+                             double alt, double az, 
+                             const QString &dateObs,
+                             double expectedRA = 0.0, double expectedDec = 0.0,
+                             double currentRA = 0.0, double currentDec = 0.0,
+                             double testLat = 0.0, double testLon = 0.0);
+    double calculateJD(int year, int month, int day, int hour, int minute, int second);
+    double calculateLST(double JD, double longitude);
+    void altAzToRaDec(double alt, double az, double lat, double lst, double &ra, double &dec);
+
     // UI components - Main tabs
     QTabWidget *m_tabWidget;
     QWidget *m_basicTab;

@@ -225,7 +225,7 @@ bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
     
     // Convert Alt/Az to RA/Dec
     double ra, dec;
-    QString dateObs = json["date_obs"].toString();
+    QString dateObs = extractDateObs(fitsPath);
     if (!convertAltAzToRaDec(alt, az, dateObs, ra, dec)) {
         logMessage("Failed to convert coordinates", "red");
         return false;

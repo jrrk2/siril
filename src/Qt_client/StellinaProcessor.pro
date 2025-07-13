@@ -37,7 +37,6 @@ unix:!macx {
 
 # Include directories
 INCLUDEPATH += .
-INCLUDEPATH += /opt/homebrew/include
 
 # Source files
 SOURCES += \
@@ -82,7 +81,9 @@ macx {
     
     # For distribution
     # QMAKE_POST_LINK += macdeployqt $$OUT_PWD/$${TARGET}.app
-}
+    INCLUDEPATH += /opt/homebrew/include
+    LIBS += -L/opt/homebrew/lib -lnova
+    }
 
 # Build output directories
 CONFIG(debug, debug|release) {

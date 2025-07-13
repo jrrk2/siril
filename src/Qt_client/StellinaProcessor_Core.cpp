@@ -18,6 +18,8 @@
 #include <QThread>
 #include <cmath>
 #include <vector>
+#include <limits>
+#include <algorithm>  // for std::fmod if needed
 
 StellinaProcessor::StellinaProcessor(QWidget *parent)
     : QMainWindow(parent)
@@ -65,7 +67,8 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
     connectSignals();
     updateUI();
     loadSettings();
-    
+    testLibnovaConversion();
+ 
     logMessage("Enhanced Stellina Processor started. Connect to Siril and select processing mode.", "blue");
     
     // Scan for dark frames if directory is set
@@ -76,6 +79,310 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
 
 StellinaProcessor::~StellinaProcessor() {
     saveSettings();
+}
+
+// Add these helper functions to StellinaProcessor_Core.cpp
+// (based on your working lstest.cpp code)
+
+// Constants
+const double PI = 3.14159265358979323846;
+const double DEG_TO_RAD = PI / 180.0;
+const double RAD_TO_DEG = 180.0 / PI;
+
+// Function to calculate Julian Date (JD) from a given Gregorian date
+double StellinaProcessor::calculateJD(int year, int month, int day, int hour, int minute, int second) {
+    int A = (14 - month) / 12;
+    int Y = year + 4800 - A;
+    int M = month + 12 * A - 3;
+
+    double JD = day + ((153 * M + 2) / 5) + 365 * Y + Y / 4 - Y / 100 + Y / 400 - 32045;
+    JD += hour / 24.0 + minute / 1440.0 + second / 86400.0;
+    return JD;
+}
+
+// Function to calculate Local Sidereal Time (LST) from Julian Date (JD) and observer's longitude
+double StellinaProcessor::calculateLST(double JD, double longitude) {
+    // Calculate Julian Century (T)
+    double T = (JD - 2451545.0) / 36525.0;
+
+    // Calculate Greenwich Sidereal Time (GST)
+    double GST = 280.46061837 + 360.98564736629 * (JD - 2451545.0) + T * T * (0.000387933 - T / 38710000.0);
+    GST = fmod(GST, 360.0);  // Ensure GST is between 0 and 360 degrees
+
+    // Convert to Local Sidereal Time (LST) by adding observer's longitude
+    double LST = GST + longitude;  // Longitude in degrees
+    LST = fmod(LST, 360.0);  // Ensure LST is between 0 and 360 degrees
+
+    // Convert LST to hours
+    LST /= 15.0;  // 15 degrees = 1 hour
+
+    // Ensure LST is between 0 and 24 hours
+    if (LST < 0) LST += 24.0;
+    return LST;
+}
+
+// Function to convert ALT/AZ to RA/DEC (from your working code)
+void StellinaProcessor::altAzToRaDec(double alt, double az, double lat, double lst, double &ra, double &dec) {
+    // Convert Alt/Az to radians
+    alt *= DEG_TO_RAD;
+    az *= DEG_TO_RAD;
+    lat *= DEG_TO_RAD;
+
+    // Calculate Declination
+    dec = asin(sin(alt) * sin(lat) + cos(alt) * cos(lat) * cos(az));
+
+    // Calculate Hour Angle
+    double H = atan2(sin(az), cos(az) * sin(lat) - tan(dec) * cos(lat));
+
+    // Convert back to degrees
+    ra = lst * 15.0 - H * RAD_TO_DEG;
+    dec *= RAD_TO_DEG;
+
+    // Ensure RA is between 0 and 360 degrees
+    if (ra < 0) ra += 360;
+    if (ra >= 360) ra -= 360;
+}
+
+// Replace the convertAltAzToRaDec function with this proven implementation
+bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec) {
+    // Parse observer location from settings (default to London if not set)
+    QStringList locationParts = m_observerLocation.split(',');
+    double observer_lat = 51.5074;  // London latitude (degrees)
+    double observer_lon = -0.1278;  // London longitude (degrees)
+    
+    // Try to parse observer location if it's in "lat,lon" format
+    if (locationParts.size() >= 2) {
+        bool ok1, ok2;
+        double lat = locationParts[0].trimmed().toDouble(&ok1);
+        double lon = locationParts[1].trimmed().toDouble(&ok2);
+        if (ok1 && ok2) {
+            observer_lat = lat;
+            observer_lon = lon;
+        }
+    }
+    
+    if (m_debugMode) {
+        logMessage(QString("Using observer location: lat=%1°, lon=%2°")
+                      .arg(observer_lat, 0, 'f', 4)
+                      .arg(observer_lon, 0, 'f', 4), "gray");
+    }
+    
+    // Parse observation time from FITS DATE-OBS header
+    if (m_debugMode) {
+        logMessage(QString("Raw dateObs parameter: '%1' (length: %2)").arg(dateObs).arg(dateObs.length()), "gray");
+    }
+    
+    QDateTime obsTime;
+    if (!dateObs.isEmpty()) {
+        // Try different date formats that might be in FITS headers
+        QStringList formats = {
+            "yyyy-MM-ddThh:mm:ss.zzz",
+            "yyyy-MM-ddThh:mm:ss.zzzZ",
+            "yyyy-MM-ddThh:mm:ss",
+            "yyyy-MM-ddThh:mm:ssZ",
+            "yyyy-MM-dd hh:mm:ss.zzz",
+            "yyyy-MM-dd hh:mm:ss",
+            "yyyy-MM-dd"
+        };
+        
+        for (const QString &format : formats) {
+            obsTime = QDateTime::fromString(dateObs, format);
+            if (obsTime.isValid()) {
+                // Ensure we're working in UTC
+                obsTime.setTimeSpec(Qt::UTC);
+                break;
+            }
+        }
+    }
+    
+    if (!obsTime.isValid()) {
+        logMessage(QString("ERROR: Could not parse observation time '%1' - coordinate conversion requires accurate time").arg(dateObs), "red");
+        logMessage("Supported time formats: yyyy-MM-ddThh:mm:ss.zzz, yyyy-MM-ddThh:mm:ss, yyyy-MM-dd hh:mm:ss", "red");
+        return false;
+    }
+    
+    if (m_debugMode) {
+        logMessage(QString("Observation time: %1").arg(obsTime.toString(Qt::ISODate)), "gray");
+    }
+    
+    // Calculate Julian Date using proven method
+    double jd = calculateJD(obsTime.date().year(),
+                           obsTime.date().month(),
+                           obsTime.date().day(),
+                           obsTime.time().hour(),
+                           obsTime.time().minute(),
+                           obsTime.time().second());
+    
+    if (m_debugMode) {
+        logMessage(QString("Julian Day: %1").arg(jd, 0, 'f', 6), "gray");
+    }
+    
+    // Calculate Local Sidereal Time using proven method
+    double lst = calculateLST(jd, observer_lon);
+    
+    if (m_debugMode) {
+        logMessage(QString("Local Sidereal Time: %1 hours (%2°)")
+                      .arg(lst, 0, 'f', 4)
+                      .arg(lst * 15.0, 0, 'f', 2), "gray");
+    }
+    
+    // Convert Alt/Az to RA/Dec using proven method
+    altAzToRaDec(alt, az, observer_lat, lst, ra, dec);
+    
+    if (m_debugMode) {
+        logMessage(QString("Coordinate conversion using proven algorithm:"), "blue");
+        logMessage(QString("  Input Alt/Az: %1°, %2°").arg(alt, 0, 'f', 4).arg(az, 0, 'f', 4), "blue");
+        logMessage(QString("  Observer: %1°N, %2°E").arg(observer_lat, 0, 'f', 4).arg(observer_lon, 0, 'f', 4), "blue");
+        logMessage(QString("  Time: %1 (JD %2)").arg(obsTime.toString(Qt::ISODate)).arg(jd, 0, 'f', 6), "blue");
+        logMessage(QString("  LST: %1 hours").arg(lst, 0, 'f', 4), "blue");
+        logMessage(QString("  Result RA/Dec: %1°, %2°").arg(ra, 0, 'f', 6).arg(dec, 0, 'f', 6), "blue");
+        
+        // Also show in hours:minutes:seconds format for RA
+        double ra_hours = ra / 15.0;  // Convert degrees to hours
+        int h = static_cast<int>(ra_hours);
+        int m = static_cast<int>((ra_hours - h) * 60);
+        double s = ((ra_hours - h) * 60 - m) * 60;
+        logMessage(QString("  RA in HMS: %1h %2m %3s").arg(h).arg(m).arg(s, 0, 'f', 2), "blue");
+        
+        // Show declination in degrees:arcminutes:arcseconds
+        int d = static_cast<int>(dec);
+        int am = static_cast<int>(qAbs(dec - d) * 60);
+        double as = (qAbs(dec - d) * 60 - am) * 60;
+        logMessage(QString("  Dec in DMS: %1° %2' %3\"").arg(d).arg(am).arg(as, 0, 'f', 1), "blue");
+    }
+    
+    // Sanity check the results
+    if (ra < 0 || ra >= 360.0) {
+        logMessage(QString("Warning: RA out of range: %1°").arg(ra), "orange");
+    }
+    
+    if (dec < -90.0 || dec > 90.0) {
+        logMessage(QString("Warning: Dec out of range: %1°").arg(dec), "orange");
+    }
+    
+    return true;
+}
+
+// Add these function declarations to StellinaProcessor.h in the private section:
+/*
+private:
+    double calculateJD(int year, int month, int day, int hour, int minute, int second);
+    double calculateLST(double JD, double longitude);
+    void altAzToRaDec(double alt, double az, double lat, double lst, double &ra, double &dec);
+*/
+
+QString StellinaProcessor::extractDateObs(const QString &fitsFile) {
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fitsFile.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
+        if (m_debugMode) {
+            logMessage(QString("Failed to open FITS file for DATE-OBS extraction: %1 (status: %2)").arg(fitsFile).arg(status), "red");
+        }
+        return QString();
+    }
+    
+    // Try to read DATE-OBS keyword
+    char dateobs[FLEN_VALUE];  // FLEN_VALUE is typically 71 characters
+    char comment[FLEN_COMMENT];
+    
+    if (fits_read_key(fptr, TSTRING, "DATE-OBS", dateobs, comment, &status) == 0) {
+        fits_close_file(fptr, &status);
+        QString result = QString::fromLatin1(dateobs).trimmed();
+        
+        // Remove any surrounding quotes that FITS might include
+        if (result.startsWith('\'') && result.endsWith('\'')) {
+            result = result.mid(1, result.length() - 2);
+        }
+        if (result.startsWith('"') && result.endsWith('"')) {
+            result = result.mid(1, result.length() - 2);
+        }
+        
+        if (m_debugMode) {
+            logMessage(QString("Extracted DATE-OBS: '%1' from %2").arg(result).arg(QFileInfo(fitsFile).fileName()), "gray");
+        }
+        
+        return result;
+    }
+    
+    // If DATE-OBS doesn't exist, try other common date keywords
+    QStringList dateKeywords = {"DATE", "DATE_OBS", "DATEOBS", "OBS-DATE"};
+    
+    for (const QString &keyword : dateKeywords) {
+        status = 0; // Reset status
+        QByteArray keyBytes = keyword.toLatin1();
+        
+        if (fits_read_key(fptr, TSTRING, keyBytes.data(), dateobs, comment, &status) == 0) {
+            fits_close_file(fptr, &status);
+            QString result = QString::fromLatin1(dateobs).trimmed();
+            
+            // Remove quotes
+            if (result.startsWith('\'') && result.endsWith('\'')) {
+                result = result.mid(1, result.length() - 2);
+            }
+            if (result.startsWith('"') && result.endsWith('"')) {
+                result = result.mid(1, result.length() - 2);
+            }
+            
+            if (m_debugMode) {
+                logMessage(QString("Found date in keyword '%1': '%2' from %3").arg(keyword).arg(result).arg(QFileInfo(fitsFile).fileName()), "gray");
+            }
+            
+            return result;
+        }
+    }
+    
+    fits_close_file(fptr, &status);
+    
+    if (m_debugMode) {
+        logMessage(QString("No date keyword found in FITS header: %1").arg(QFileInfo(fitsFile).fileName()), "orange");
+    }
+    
+    return QString();
+}
+
+// Also add this helper function to parse observer location more robustly
+bool StellinaProcessor::parseObserverLocation(const QString &location, double &lat, double &lon, double &elevation) {
+    // Default values (London)
+    lat = 51.5074;
+    lon = -0.1278;
+    elevation = 0.0;
+    
+    if (location.isEmpty()) {
+        return false;
+    }
+    
+    // Try to parse different formats:
+    // "London" -> lookup coordinates (not implemented here)
+    // "51.5074,-0.1278" -> lat,lon
+    // "51.5074,-0.1278,25" -> lat,lon,elevation
+    // "51°30'27\"N,0°7'40\"W" -> DMS format (not implemented here)
+    
+    QStringList parts = location.split(',');
+    if (parts.size() >= 2) {
+        bool ok1, ok2;
+        double parsedLat = parts[0].trimmed().toDouble(&ok1);
+        double parsedLon = parts[1].trimmed().toDouble(&ok2);
+        
+        if (ok1 && ok2) {
+            lat = parsedLat;
+            lon = parsedLon;
+            
+            if (parts.size() >= 3) {
+                bool ok3;
+                double parsedElev = parts[2].trimmed().toDouble(&ok3);
+                if (ok3) {
+                    elevation = parsedElev;
+                }
+            }
+            return true;
+        }
+    }
+    
+    // Could add city name lookup here
+    // For now, just return false for unknown formats
+    return false;
 }
 
 void StellinaProcessor::loadSettings() {
@@ -576,89 +883,172 @@ bool StellinaProcessor::createMasterDarkDirect(const QStringList &darkFrames, co
                   .arg(darkFrames.size()).arg(successfulFrames), "green");
     return true;
 }
+// Replace the applyMasterDark function in StellinaProcessor_Core.cpp with this implementation
 
 bool StellinaProcessor::applyMasterDark(const QString &lightFrame, const QString &masterDark, const QString &outputFrame) {
-    logMessage(QString("Applying master dark to %1").arg(QFileInfo(lightFrame).fileName()), "blue");
+    logMessage(QString("Applying master dark to %1 using direct FITS processing").arg(QFileInfo(lightFrame).fileName()), "blue");
     
-    // Add a small delay to prevent overwhelming Siril
-    QThread::msleep(100);
+    fitsfile *lightFits = nullptr;
+    fitsfile *darkFits = nullptr;
+    fitsfile *outputFits = nullptr;
+    int status = 0;
     
-    // Try loading the light frame with retry logic
-    int maxRetries = 3;
-    bool loadSuccess = false;
-    
-    for (int attempt = 1; attempt <= maxRetries; ++attempt) {
-        if (m_sirilClient->loadImage(lightFrame)) {
-            loadSuccess = true;
-            break;
-        } else {
-            if (attempt < maxRetries) {
-                logMessage(QString("Load attempt %1 failed, retrying...").arg(attempt), "orange");
-                QThread::msleep(500); // Wait before retry
-            }
-        }
-    }
-    
-    if (!loadSuccess) {
-        logMessage("Failed to load light frame after retries", "red");
+    // Open light frame
+    QByteArray lightPath = lightFrame.toLocal8Bit();
+    if (fits_open_file(&lightFits, lightPath.data(), READONLY, &status)) {
+        logMessage(QString("Failed to open light frame: %1 (FITS error: %2)").arg(lightFrame).arg(status), "red");
         return false;
     }
     
-    // Try Siril's calibrate command first
-    QString calibrateCmd = QString("calibrate_single \"%1\"").arg(masterDark);
-    bool calibrateSuccess = m_sirilClient->sendSirilCommand(calibrateCmd);
-    
-    if (!calibrateSuccess) {
-        logMessage("calibrate_single failed, using manual subtraction", "orange");
-        
-        // Manual subtraction method with retry
-        QString loadDarkCmd = QString("load \"%1\" $masterdark").arg(masterDark);
-        bool darkLoadSuccess = false;
-        
-        for (int attempt = 1; attempt <= 2; ++attempt) {
-            if (m_sirilClient->sendSirilCommand(loadDarkCmd)) {
-                darkLoadSuccess = true;
-                break;
-            } else if (attempt < 2) {
-                logMessage("Failed to load master dark, retrying...", "orange");
-                QThread::msleep(300);
-            }
-        }
-        
-        if (!darkLoadSuccess) {
-            logMessage("Failed to load master dark", "red");
-            m_sirilClient->closeImage();
-            return false;
-        }
-        
-        // Subtract master dark from light frame
-        if (!m_sirilClient->sendSirilCommand("sub $masterdark")) {
-            logMessage("Failed to subtract master dark", "red");
-            m_sirilClient->closeImage();
-            return false;
-        }
-    }
-    
-    // Save calibrated frame with retry
-    bool saveSuccess = false;
-    for (int attempt = 1; attempt <= 2; ++attempt) {
-        if (m_sirilClient->saveImage(outputFrame)) {
-            saveSuccess = true;
-            break;
-        } else if (attempt < 2) {
-            logMessage("Save attempt failed, retrying...", "orange");
-            QThread::msleep(200);
-        }
-    }
-    
-    if (!saveSuccess) {
-        logMessage("Failed to save calibrated frame", "red");
-        m_sirilClient->closeImage();
+    // Open master dark
+    QByteArray darkPath = masterDark.toLocal8Bit();
+    if (fits_open_file(&darkFits, darkPath.data(), READONLY, &status)) {
+        logMessage(QString("Failed to open master dark: %1 (FITS error: %2)").arg(masterDark).arg(status), "red");
+        fits_close_file(lightFits, &status);
         return false;
     }
     
-    m_sirilClient->closeImage();
-    logMessage("Master dark applied successfully", "green");
+    // Get dimensions and verify they match
+    long lightNaxes[2], darkNaxes[2];
+    if (fits_get_img_size(lightFits, 2, lightNaxes, &status) ||
+        fits_get_img_size(darkFits, 2, darkNaxes, &status)) {
+        logMessage(QString("Failed to get image dimensions (FITS error: %1)").arg(status), "red");
+        fits_close_file(lightFits, &status);
+        fits_close_file(darkFits, &status);
+        return false;
+    }
+    
+    if (lightNaxes[0] != darkNaxes[0] || lightNaxes[1] != darkNaxes[1]) {
+        logMessage(QString("Image dimensions mismatch - Light: %1x%2, Dark: %3x%4")
+                      .arg(lightNaxes[0]).arg(lightNaxes[1])
+                      .arg(darkNaxes[0]).arg(darkNaxes[1]), "red");
+        fits_close_file(lightFits, &status);
+        fits_close_file(darkFits, &status);
+        return false;
+    }
+    
+    long totalPixels = lightNaxes[0] * lightNaxes[1];
+    logMessage(QString("Processing %1 x %2 image (%3 pixels)").arg(lightNaxes[0]).arg(lightNaxes[1]).arg(totalPixels), "blue");
+    
+    // Create output FITS file
+    QByteArray outputPathBytes = QString("!%1").arg(outputFrame).toLocal8Bit(); // ! forces overwrite
+    if (fits_create_file(&outputFits, outputPathBytes.data(), &status)) {
+        logMessage(QString("Failed to create output FITS file: %1 (FITS error: %2)").arg(outputFrame).arg(status), "red");
+        fits_close_file(lightFits, &status);
+        fits_close_file(darkFits, &status);
+        return false;
+    }
+    
+    // Copy header from light frame
+    if (fits_copy_header(lightFits, outputFits, &status)) {
+        logMessage(QString("Failed to copy FITS header (FITS error: %1)").arg(status), "red");
+        fits_close_file(lightFits, &status);
+        fits_close_file(darkFits, &status);
+        fits_close_file(outputFits, &status);
+        return false;
+    }
+    
+    // Allocate memory for pixel data
+    std::vector<float> lightPixels(totalPixels);
+    std::vector<float> darkPixels(totalPixels);
+    std::vector<float> resultPixels(totalPixels);
+    
+    // Read light frame pixel data
+    long firstPixel = 1;
+    if (fits_read_img(lightFits, TFLOAT, firstPixel, totalPixels, nullptr, 
+                     lightPixels.data(), nullptr, &status)) {
+        logMessage(QString("Failed to read light frame pixel data (FITS error: %1)").arg(status), "red");
+        fits_close_file(lightFits, &status);
+        fits_close_file(darkFits, &status);
+        fits_close_file(outputFits, &status);
+        QFile::remove(outputFrame);
+        return false;
+    }
+    
+    // Read master dark pixel data
+    if (fits_read_img(darkFits, TFLOAT, firstPixel, totalPixels, nullptr, 
+                     darkPixels.data(), nullptr, &status)) {
+        logMessage(QString("Failed to read master dark pixel data (FITS error: %1)").arg(status), "red");
+        fits_close_file(lightFits, &status);
+        fits_close_file(darkFits, &status);
+        fits_close_file(outputFits, &status);
+        QFile::remove(outputFrame);
+        return false;
+    }
+    
+    // Close input files as we no longer need them
+    fits_close_file(lightFits, &status);
+    fits_close_file(darkFits, &status);
+    
+    // Perform dark subtraction with negative truncation
+    long negativePixels = 0;
+    float minResult = std::numeric_limits<float>::max();
+    float maxResult = std::numeric_limits<float>::lowest();
+    
+    for (long i = 0; i < totalPixels; ++i) {
+        float result = lightPixels[i] - darkPixels[i];
+        
+        // Truncate negative values to 0
+        if (result < 0.0f) {
+            result = 0.0f;
+            negativePixels++;
+        }
+        
+        resultPixels[i] = result;
+        
+        // Track min/max for statistics
+        if (result < minResult) minResult = result;
+        if (result > maxResult) maxResult = result;
+    }
+    
+    // Log statistics
+    double negativePercent = (static_cast<double>(negativePixels) / totalPixels) * 100.0;
+    logMessage(QString("Dark subtraction complete - Negative pixels truncated: %1 (%2%)")
+                  .arg(negativePixels).arg(negativePercent, 0, 'f', 2), "blue");
+    logMessage(QString("Result range: %1 to %2").arg(minResult, 0, 'f', 2).arg(maxResult, 0, 'f', 2), "gray");
+    
+    // Write result to output file
+    if (fits_write_img(outputFits, TFLOAT, firstPixel, totalPixels, 
+                      resultPixels.data(), &status)) {
+        logMessage(QString("Failed to write calibrated pixel data (FITS error: %1)").arg(status), "red");
+        fits_close_file(outputFits, &status);
+        QFile::remove(outputFrame);
+        return false;
+    }
+    
+    // Update header with processing information
+    QString historyComment = QString("Dark calibrated using master dark: %1").arg(QFileInfo(masterDark).fileName());
+    QByteArray historyBytes = historyComment.toLocal8Bit();
+    if (fits_write_history(outputFits, historyBytes.data(), &status)) {
+        // Non-critical error
+        logMessage("Warning: Could not write processing history to header", "orange");
+        status = 0;
+    }
+    
+    // Add custom keywords for processing info
+    int truncatedCount = static_cast<int>(negativePixels);
+    if (fits_write_key(outputFits, TINT, "NEGTRUNC", &truncatedCount, "Number of negative pixels truncated", &status)) {
+        logMessage("Warning: Could not write truncation count to header", "orange");
+        status = 0;
+    }
+    
+    QString processingDate = QDateTime::currentDateTime().toString(Qt::ISODate);
+    QByteArray dateBytes = processingDate.toLocal8Bit();
+    char* datePtr = dateBytes.data();
+    if (fits_write_key(outputFits, TSTRING, "DARKCAL", &datePtr, "Dark calibration date", &status)) {
+        logMessage("Warning: Could not write processing date to header", "orange");
+        status = 0;
+    }
+    
+    fits_close_file(outputFits, &status);
+    
+    if (status != 0) {
+        logMessage(QString("FITS error occurred during dark calibration (error: %1)").arg(status), "red");
+        QFile::remove(outputFrame);
+        return false;
+    }
+    
+    logMessage(QString("Dark calibration successful: %1").arg(QFileInfo(outputFrame).fileName()), "green");
     return true;
 }
 
@@ -1029,14 +1419,6 @@ bool StellinaProcessor::extractCoordinates(const QJsonObject &json, double &alt,
     return false;
 }
 
-bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec) {
-    // Placeholder implementation - would need proper coordinate conversion
-    ra = az;
-    dec = alt;
-    Q_UNUSED(dateObs)
-    return true;
-}
-
 bool StellinaProcessor::checkStellinaQuality(const QJsonObject &json) {
     if (json.contains("stackingData")) {
         QJsonObject stackingData = json["stackingData"].toObject();
@@ -1144,4 +1526,171 @@ void StellinaProcessor::saveProcessingReport() {
     
     reportFile.close();
     logMessage(QString("Processing report saved: %1").arg(QFileInfo(reportPath).fileName()), "blue");
+}
+// Add these test functions to StellinaProcessor_Core.cpp
+// Call testLibnovaConversion() from your constructor or a menu action for verification
+
+void StellinaProcessor::testLibnovaConversion() {
+    logMessage("=== Testing libnova coordinate conversion ===", "blue");
+    
+    // Test case 1: First image from your log
+    // Blind solve result: RA=10.9127702516°, Dec=41.2122118775°
+    // Your current result: RA=132.720487°, Dec=22.962432°
+    testSingleConversion(
+        "Test 1 - First image",
+        42.0410,           // Alt from log
+        286.8526,          // Az from log  
+        "2024-01-09T22:13:29",  // DATE-OBS from log
+        10.9127702516,     // Expected RA from blind solve
+        41.2122118775,     // Expected Dec from blind solve
+        132.720487,        // Current RA result
+        22.962432          // Current Dec result
+    );
+    
+    // Test case 2: Known good coordinate conversion
+    // Use a well-known object at a specific time for validation
+    // M31 (Andromeda Galaxy) coordinates: RA=10.684°, Dec=41.269°
+    testSingleConversion(
+        "Test 2 - M31 reference",
+        45.0,              // Approximate alt for M31 from London
+        290.0,             // Approximate az for M31 from London
+        "2024-01-09T22:00:00",  // Round time
+        10.684,            // M31 RA (known)
+        41.269,            // M31 Dec (known)
+        0.0,               // Will be calculated
+        0.0                // Will be calculated
+    );
+    
+    // Test case 3: Different time to check time dependency
+    testSingleConversion(
+        "Test 3 - Time dependency check",
+        42.0410,           // Same Alt as test 1
+        286.8526,          // Same Az as test 1
+        "2024-01-09T23:13:29",  // 1 hour later
+        0.0,               // Expected will be different due to time
+        0.0,               // Expected will be different due to time
+        0.0,               // Will be calculated
+        0.0                // Will be calculated
+    );
+    
+    // Test case 4: Different observer location
+    testSingleConversion(
+        "Test 4 - Different location (Paris)",
+        42.0410,           // Same Alt
+        286.8526,          // Same Az
+        "2024-01-09T22:13:29",  // Same time
+        0.0,               // Expected will be different due to location
+        0.0,               // Expected will be different due to location
+        0.0,               // Will be calculated
+        0.0,               // Will be calculated
+        48.8566,           // Paris latitude
+        2.3522             // Paris longitude
+    );
+    
+    // Test case 5: Zenith pointing (RA should equal LST, Dec should equal latitude)
+    // For 2024-01-09T22:13:29 at London, LST ≈ 17.5 hours ≈ 262.5°
+    testSingleConversion(
+        "Test 5 - Zenith pointing",
+        90.0,              // Pointing straight up
+        0.0,               // Azimuth doesn't matter at zenith
+        "2024-01-09T22:13:29",
+        262.5,             // Expected RA ≈ LST (will verify in test)
+        51.5074,           // Dec should equal observer latitude
+        0.0,               // Will be calculated
+        0.0                // Will be calculated
+    );
+    
+    logMessage("=== libnova coordinate conversion tests complete ===", "blue");
+}
+
+void StellinaProcessor::testSingleConversion(const QString &testName,
+                                           double alt, double az, 
+                                           const QString &dateObs,
+                                           double expectedRA, double expectedDec,
+                                           double currentRA, double currentDec,
+                                           double testLat, double testLon) {
+    
+    logMessage(QString("--- %1 ---").arg(testName), "green");
+    logMessage(QString("Input: Alt=%1°, Az=%2°, Time=%3")
+                  .arg(alt, 0, 'f', 4)
+                  .arg(az, 0, 'f', 4)
+                  .arg(dateObs), "gray");
+    
+    // Save current observer location
+    QString savedLocation = m_observerLocation;
+    
+    // Set test location if provided
+    if (testLat != 0.0 || testLon != 0.0) {
+        m_observerLocation = QString("%1,%2").arg(testLat, 0, 'f', 4).arg(testLon, 0, 'f', 4);
+        logMessage(QString("Using test location: %1°N, %2°E")
+                      .arg(testLat, 0, 'f', 4).arg(testLon, 0, 'f', 4), "gray");
+    }
+    
+    // Perform conversion
+    double calculatedRA, calculatedDec;
+    bool success = convertAltAzToRaDec(alt, az, dateObs, calculatedRA, calculatedDec);
+    
+    if (success) {
+        logMessage(QString("Calculated: RA=%1°, Dec=%2°")
+                      .arg(calculatedRA, 0, 'f', 6)
+                      .arg(calculatedDec, 0, 'f', 6), "blue");
+        
+        // Show in HMS/DMS format too
+        double ra_hours = calculatedRA / 15.0;
+        int h = static_cast<int>(ra_hours);
+        int m = static_cast<int>((ra_hours - h) * 60);
+        double s = ((ra_hours - h) * 60 - m) * 60;
+        
+        int d = static_cast<int>(calculatedDec);
+        int am = static_cast<int>(qAbs(calculatedDec - d) * 60);
+        double as = (qAbs(calculatedDec - d) * 60 - am) * 60;
+        
+        logMessage(QString("          RA=%1h%2m%3s, Dec=%4°%5'%6\"")
+                      .arg(h).arg(m, 2, 10, QChar('0')).arg(s, 0, 'f', 1)
+                      .arg(d).arg(am, 2, 10, QChar('0')).arg(as, 0, 'f', 1), "blue");
+        
+        // Compare with expected results if provided
+        if (expectedRA != 0.0 || expectedDec != 0.0) {
+            double raError = qAbs(calculatedRA - expectedRA);
+            double decError = qAbs(calculatedDec - expectedDec);
+            
+            logMessage(QString("Expected: RA=%1°, Dec=%2°")
+                          .arg(expectedRA, 0, 'f', 6)
+                          .arg(expectedDec, 0, 'f', 6), "orange");
+            logMessage(QString("Error:    RA=%1° (%2 arcmin), Dec=%3° (%4 arcmin)")
+                          .arg(raError, 0, 'f', 6).arg(raError * 60, 0, 'f', 1)
+                          .arg(decError, 0, 'f', 6).arg(decError * 60, 0, 'f', 1), 
+                      (raError < 1.0 && decError < 1.0) ? "green" : "red");
+            
+            // Check if we're close to expected (within 1 degree)
+            if (raError < 1.0 && decError < 1.0) {
+                logMessage("✓ PASS: Within 1° tolerance", "green");
+            } else {
+                logMessage("✗ FAIL: Outside 1° tolerance", "red");
+                
+                // Try to diagnose the issue
+                if (raError > 10.0) {
+                    logMessage("Large RA error suggests coordinate system issue", "red");
+                }
+                if (qAbs(calculatedRA - currentRA) < 1.0) {
+                    logMessage("Current result matches - may be systematic error", "orange");
+                }
+            }
+        }
+        
+        // Compare with current result if provided
+        if (currentRA != 0.0 || currentDec != 0.0) {
+            logMessage(QString("Previous: RA=%1°, Dec=%2°")
+                          .arg(currentRA, 0, 'f', 6)
+                          .arg(currentDec, 0, 'f', 6), "gray");
+        }
+        
+    } else {
+        logMessage("✗ CONVERSION FAILED", "red");
+    }
+    
+    // Restore original observer location
+    m_observerLocation = savedLocation;
+    
+    logMessage("", "gray");  // Blank line for separation
 }

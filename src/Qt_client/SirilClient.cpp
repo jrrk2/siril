@@ -19,7 +19,7 @@ SirilClient::SirilClient(QObject *parent)
 {
     // Set up connection timer
     m_connectionTimer->setSingleShot(true);
-    m_connectionTimer->setInterval(5000); // 5 second timeout
+    m_connectionTimer->setInterval(30000); // 5 second timeout
     
     // Connect signals
     connect(m_socket, &QLocalSocket::connected, 
