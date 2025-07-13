@@ -26,6 +26,7 @@
 #include <QTableWidget>
 #include <QSplitter>
 #include <QElapsedTimer>
+#include <QProcessEnvironment>
 
 #include "SirilClient.h"
 
@@ -58,6 +59,24 @@ struct StackingParams {
     bool applyDrizzle;        // apply drizzle enhancement
     double drizzleScale;      // drizzle scale factor
     QString outputFormat;     // "fits", "tiff", "png"
+};
+
+// Add before class declaration
+struct StellinaImageData {
+    QString originalFitsPath;     // Original raw FITS file path
+    QString originalJsonPath;     // Original JSON metadata file path  
+    QString currentFitsPath;      // Current FITS file path (updated through pipeline)
+    QJsonObject metadata;         // Complete JSON metadata
+    double altitude;              // Stellina altitude (degrees)
+    double azimuth;               // Stellina azimuth (degrees)
+    QString dateObs;              // DATE-OBS from FITS header
+    bool hasValidCoordinates;     // Whether coordinates are valid
+    int exposureSeconds;          // Exposure time in seconds
+    int temperatureKelvin;        // Sensor temperature in Kelvin
+    QString binning;              // Binning mode (e.g., "1x1", "2x2")
+    
+    StellinaImageData() : altitude(0), azimuth(0), hasValidCoordinates(false), 
+                         exposureSeconds(0), temperatureKelvin(284), binning("1x1") {}
 };
 
 class StellinaProcessor : public QMainWindow {
@@ -162,6 +181,8 @@ private:
     bool createBinnedImageForPlatesolving(const QString &inputPath, const QString &binnedPath);
     bool performCFABinning(const std::vector<float> &inputPixels, std::vector<float> &binnedPixels, 
 			   long width, long height, long &binnedWidth, long &binnedHeight);
+    QProcessEnvironment createSolveFieldEnvironment();
+    QStringList getAstrometryPaths();
 
     // UI components - Main tabs
     QTabWidget *m_tabWidget;
@@ -301,6 +322,16 @@ private:
     QStringList m_registeredFiles;
     QString m_finalStackedImage;
     QString m_sequenceName;
+
+    // Add to private member variables
+    QList<StellinaImageData> m_stellinaImageData;  // Tracks metadata through pipeline
+
+    // Add to private function declarations
+    bool writeStellinaMetadataToFits(const QString &fitsPath, const StellinaImageData &imageData);
+    bool readStellinaMetadataFromFits(const QString &fitsPath, StellinaImageData &imageData);
+    bool updateProcessingStage(const QString &fitsPath, const QString &stage);
+    bool cleanExistingStellinaKeywords(const QString &fitsPath);
+    StellinaImageData* findImageDataByPath(const QString &path);
 };
 
 #endif // STELLINAPROCESSOR_H

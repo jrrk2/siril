@@ -349,9 +349,120 @@ void StellinaProcessor::finishProcessing() {
 
 bool StellinaProcessor::checkSolveFieldInstalled() {
     QProcess process;
-    process.start("solve-field", QStringList() << "--help");
+    process.start("/opt/homebrew/bin/solve-field", QStringList() << "--help");
     bool finished = process.waitForFinished(3000);
     return finished && process.exitCode() == 0;
+}
+
+QStringList StellinaProcessor::getAstrometryPaths() {
+    QStringList astrometryPaths;
+    
+    // Common directories where astrometry.net tools are installed
+    QStringList searchDirs = {
+        "/opt/homebrew/bin",              // Homebrew Apple Silicon
+        "/opt/homebrew/libexec/astrometry.net/bin",  // Homebrew support tools
+        "/usr/local/bin",                 // Homebrew Intel / manual install
+        "/usr/local/astrometry/bin",      // Custom install location
+        "/usr/bin",                       // System package (Linux)
+        "/opt/astrometry.net/bin",        // Alternative install
+        "/usr/local/libexec/astrometry.net/bin"  // Support tools location
+    };
+    
+    // Check which directories actually exist and contain astrometry tools
+    for (const QString &dir : searchDirs) {
+        QDir directory(dir);
+        if (directory.exists()) {
+            // Check for common astrometry.net tools
+            QStringList requiredTools = {"solve-field", "fits2fits", "pnmfile", "image2xy"};
+            bool hasTools = false;
+            
+            for (const QString &tool : requiredTools) {
+                if (QFile::exists(directory.absoluteFilePath(tool))) {
+                    hasTools = true;
+                    break;
+                }
+            }
+            
+            if (hasTools) {
+                astrometryPaths.append(dir);
+                if (m_debugMode) {
+                    logMessage(QString("Found astrometry tools in: %1").arg(dir), "gray");
+                }
+            }
+        }
+    }
+    
+    return astrometryPaths;
+}
+
+QProcessEnvironment StellinaProcessor::createSolveFieldEnvironment() {
+    // Start with current environment
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    
+    // Get astrometry.net tool directories
+    QStringList astrometryPaths = getAstrometryPaths();
+    
+    // Get current PATH
+    QString currentPath = env.value("PATH");
+    QStringList pathList = currentPath.split(QDir::listSeparator(), Qt::SkipEmptyParts);
+    
+    // Add astrometry paths to the beginning (higher priority)
+    for (const QString &astroPath : astrometryPaths) {
+        if (!pathList.contains(astroPath)) {
+            pathList.prepend(astroPath);
+        }
+    }
+    
+    // Set the enhanced PATH
+    QString enhancedPath = pathList.join(QDir::listSeparator());
+    env.insert("PATH", enhancedPath);
+    
+    if (m_debugMode) {
+        logMessage(QString("Enhanced PATH for solve-field: %1").arg(enhancedPath), "gray");
+    }
+    
+    // Add other useful environment variables for astrometry.net
+    
+    // Set data directory hints (if not already set)
+    if (!env.contains("ASTROMETRY_NET_DATA_DIR")) {
+        QStringList dataDirs = {
+            "/opt/homebrew/share/astrometry",
+            "/usr/local/share/astrometry",
+            "/usr/share/astrometry",
+            QDir::homePath() + "/.local/share/astrometry"
+        };
+        
+        for (const QString &dataDir : dataDirs) {
+            if (QDir(dataDir).exists()) {
+                env.insert("ASTROMETRY_NET_DATA_DIR", dataDir);
+                if (m_debugMode) {
+                    logMessage(QString("Set ASTROMETRY_NET_DATA_DIR: %1").arg(dataDir), "gray");
+                }
+                break;
+            }
+        }
+    }
+    
+    // Ensure solve-field can find its configuration
+    if (!env.contains("SOLVE_FIELD_CONFIG")) {
+        QStringList configPaths = {
+            "/opt/homebrew/etc/astrometry.cfg",
+            "/usr/local/etc/astrometry.cfg",
+            "/etc/astrometry.cfg"
+        };
+        
+        for (const QString &configPath : configPaths) {
+            if (QFile::exists(configPath)) {
+                env.insert("SOLVE_FIELD_CONFIG", configPath);
+                if (m_debugMode) {
+                    logMessage(QString("Found astrometry config: %1").arg(configPath), "gray");
+                }
+                break;
+            }
+        }
+    }
+    
+    return env;
 }
 
 bool StellinaProcessor::runSolveField(const QString &fitsPath, const QString &outputPath, double ra, double dec) {
@@ -388,7 +499,11 @@ bool StellinaProcessor::runSolveField(const QString &fitsPath, const QString &ou
     }
     
     // Start solve-field process
-    solveProcess.start("solve-field", arguments);
+    QProcessEnvironment enhancedEnv = createSolveFieldEnvironment();
+    solveProcess.setProcessEnvironment(enhancedEnv);
+    
+    // Start solve-field process with absolute path and enhanced environment
+    solveProcess.start("/opt/homebrew/bin/solve-field", arguments);
     
     if (!solveProcess.waitForStarted(5000)) {
         logMessage("Failed to start solve-field process", "red");
@@ -458,25 +573,24 @@ bool StellinaProcessor::runSolveField(const QString &fitsPath, const QString &ou
     }
 }
 
-// Update processImagePlatesolving to use fallback
+/*
 bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
     m_currentTaskLabel->setText("Plate solving...");
     
-    // IMMEDIATE CONNECTION CHECK
-    if (!m_sirilClient->isConnected()) {
-        logMessage("ERROR: Not connected to Siril - cannot process image", "red");
-        return false;
-    }
-    
+    // The input should be a dark-calibrated image, not the original raw image
     QString baseName = QFileInfo(fitsPath).baseName();
     
-    // Find corresponding JSON file
+    // If we're in plate solving stage, we should be working with dark-calibrated images
+    // Check if this is a dark-calibrated image already
+    QString darkCalibratedPath = fitsPath;
+    
+    // Extract metadata from the original image's JSON file
     QDir sourceDir(QFileInfo(fitsPath).dir());
     QString jsonPath;
     
     QStringList jsonCandidates = {
         baseName + ".json",
-        baseName + ".JSON",
+        baseName + ".JSON", 
         baseName + "-stacking.json",
         baseName + "-stacking.JSON",
         QFileInfo(fitsPath).completeBaseName() + ".json",
@@ -503,114 +617,96 @@ bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
     // Load JSON metadata
     QJsonObject json = loadStellinaJson(jsonPath);
     if (json.isEmpty()) {
-        logMessage(QString("Failed to load JSON metadata"), "red");
+        logMessage("Failed to load JSON metadata", "red");
         return false;
     }
     
-    // Extract coordinates
+    // Extract Alt/Az coordinates
     double alt, az;
     if (!extractCoordinates(json, alt, az)) {
         logMessage("Failed to extract coordinates from JSON", "red");
         return false;
     }
     
-    // Convert Alt/Az to RA/Dec
+    // Convert Alt/Az to RA/Dec using our proven coordinate conversion
     double ra, dec;
-    QString dateObs = extractDateObs(fitsPath);
+    QString dateObs = extractDateObs(darkCalibratedPath); // Extract from the calibrated image
     if (!convertAltAzToRaDec(alt, az, dateObs, ra, dec)) {
         logMessage("Failed to convert coordinates", "red");
         return false;
     }
     
+    // Determine which image to use for plate solving
+    QString plateSolvingImage = darkCalibratedPath; // Use the dark-calibrated image
+    QString binnedName = QString("binned_%1").arg(QFileInfo(darkCalibratedPath).fileName());
+    QString binnedPath = QDir(QFileInfo(darkCalibratedPath).dir()).absoluteFilePath(binnedName);
+    
+    double plateSolvingPixelSize = m_pixelSize;
+    
+    if (QFile::exists(binnedPath)) {
+        plateSolvingImage = binnedPath;
+        plateSolvingPixelSize = m_pixelSize * 2.0; // Binned image has 2x pixel size
+        logMessage(QString("Using binned dark-calibrated image for plate solving: %1").arg(QFileInfo(binnedPath).fileName()), "blue");
+    } else {
+        logMessage(QString("No binned image found, using dark-calibrated image: %1").arg(QFileInfo(darkCalibratedPath).fileName()), "gray");
+    }
+    
     QString outputName = QString("processed_%1").arg(baseName);
     QString outputPath = QDir(m_plateSolvedDirectory).absoluteFilePath(outputName);
     
-    // First try: Siril with coordinate hints and binning
+    // Primary method: solve-field with coordinate hints
     bool platesolveSuccess = false;
-    bool usedSiril = false;
+    QString usedMethod = "";
     
-    if (m_sirilClient->isConnected()) {
-        logMessage(QString("Trying Siril plate solve with hints: RA=%1°, Dec=%2°").arg(ra, 0, 'f', 4).arg(dec, 0, 'f', 4), "blue");
-        
-        // Load image in Siril
-        if (m_sirilClient->loadImage(fitsPath)) {
-            // Apply 2x2 CFA-aware binning before plate solving to improve SNR
-            logMessage("Applying 2x2 CFA-aware binning to improve plate solving", "blue");
-            
-            // Try CFA-specific binning commands first
-            bool binningSuccess = false;
-            
-            // Option 1: Try CFA binning if available
-            if (m_sirilClient->sendSirilCommand("bin 2 2 -cfa")) {
-                logMessage("CFA-aware binning applied successfully", "green");
-                binningSuccess = true;
-            }
-            // Option 2: Try generic binning 
-            else if (m_sirilClient->sendSirilCommand("bin 2 2")) {
-                logMessage("Generic 2x2 binning applied successfully", "green");
-                binningSuccess = true;
-            }
-            // Option 3: Try extract_green to get single channel before binning
-            else if (m_sirilClient->sendSirilCommand("extract_green") && 
-                     m_sirilClient->sendSirilCommand("bin 2 2")) {
-                logMessage("Extracted green channel and applied binning", "green");
-                binningSuccess = true;
-            }
-            
-            if (!binningSuccess) {
-                logMessage("Binning failed, continuing with original CFA resolution", "orange");
-                logMessage("WARNING: Plate solving CFA images without binning may have lower success rate", "orange");
-            }
-            
-            // Perform plate solving with hints (adjust pixel size if binning succeeded)
-            double effectivePixelSize = binningSuccess ? (m_pixelSize * 2.0) : m_pixelSize;
-            platesolveSuccess = m_sirilClient->platesolve(ra, dec, m_focalLength, effectivePixelSize, true);
-            
-            if (platesolveSuccess) {
-                logMessage("Siril plate solve succeeded with coordinate hints", "green");
-                usedSiril = true;
-                
-                // Save processed image
-                if (!m_sirilClient->saveImage(outputPath)) {
-                    logMessage("Failed to save Siril processed image", "red");
-                    m_sirilClient->closeImage();
-                    return false;
-                }
-            } else {
-                logMessage(QString("Siril plate solve failed: %1").arg(m_sirilClient->lastError()), "orange");
-                logMessage("Will try solve-field fallback", "blue");
-            }
-            
-            // Close image in Siril
-            m_sirilClient->closeImage();
-        } else {
-            logMessage("Failed to load image in Siril, will try solve-field", "orange");
-        }
-    }
+    logMessage(QString("Plate solving with solve-field: RA=%1°, Dec=%2°").arg(ra, 0, 'f', 4).arg(dec, 0, 'f', 4), "blue");
     
-    // Second try: solve-field with coordinate hints
-    if (!platesolveSuccess) {
-        m_currentTaskLabel->setText("Plate solving with solve-field...");
-        logMessage("Falling back to solve-field with coordinate hints", "blue");
-        
-        platesolveSuccess = runSolveField(fitsPath, outputPath, ra, dec);
-        
-        if (platesolveSuccess) {
-            logMessage("solve-field succeeded with coordinate hints!", "green");
-        } else {
-            logMessage("Both Siril and solve-field failed to plate solve image", "red");
-            return false;
-        }
-    }
+    platesolveSuccess = runSolveField(plateSolvingImage, outputPath, ra, dec);
     
-    // Add to plate solved files list for potential stacking
     if (platesolveSuccess) {
-        m_plateSolvedFiles.append(outputPath);
+        usedMethod = "solve-field";
+        logMessage("solve-field plate solving succeeded!", "green");
+    } else {
+        logMessage("solve-field failed, trying Siril fallback...", "orange");
         
-        QString method = usedSiril ? "Siril (with hints)" : "solve-field (with hints)";
-        logMessage(QString("Image successfully plate solved using %1").arg(method), "green");
-        return true;
+        // Fallback: Siril (only if solve-field fails)
+        if (m_sirilClient->isConnected()) {
+            logMessage("Trying Siril as fallback plate solver", "blue");
+            
+            if (m_sirilClient->loadImage(plateSolvingImage)) {
+                platesolveSuccess = m_sirilClient->platesolve(ra, dec, m_focalLength, plateSolvingPixelSize, true);
+                
+                if (platesolveSuccess) {
+                    usedMethod = "Siril (fallback)";
+                    logMessage("Siril fallback plate solving succeeded!", "green");
+                    
+                    // Save processed image from Siril
+                    if (!m_sirilClient->saveImage(outputPath)) {
+                        logMessage("Failed to save Siril processed image", "red");
+                        m_sirilClient->closeImage();
+                        return false;
+                    }
+                } else {
+                    logMessage(QString("Siril fallback also failed: %1").arg(m_sirilClient->lastError()), "red");
+                }
+                
+                m_sirilClient->closeImage();
+            } else {
+                logMessage("Failed to load image in Siril", "red");
+            }
+        } else {
+            logMessage("Siril not connected - cannot use fallback", "orange");
+        }
     }
     
-    return false;
+    if (!platesolveSuccess) {
+        logMessage("Both solve-field and Siril failed to plate solve image", "red");
+        return false;
+    }
+    
+    // Add to plate solved files list for stacking
+    m_plateSolvedFiles.append(outputPath);
+    
+    logMessage(QString("Image successfully plate solved using %1").arg(usedMethod), "green");
+    return true;
 }
+*/

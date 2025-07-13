@@ -1075,68 +1075,6 @@ bool StellinaProcessor::applyMasterDark(const QString &lightFrame, const QString
     return true;
 }
 
-bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
-    m_currentTaskLabel->setText("Dark calibration...");
-    
-    // Extract light frame characteristics
-    int lightExposure = extractExposureTime(lightFrame);
-    int lightTemperatureK = extractTemperature(lightFrame); // Now in Kelvin
-    QString lightBinning = extractBinning(lightFrame);
-    
-    if (lightExposure <= 0) {
-        logMessage("Could not determine light frame exposure time", "red");
-        return false;
-    }
-    
-    // Find all matching dark frames
-    QStringList matchingDarks = findAllMatchingDarkFrames(lightExposure, lightTemperatureK, lightBinning);
-    
-    if (matchingDarks.isEmpty()) {
-        int temperatureC = lightTemperatureK - 273;
-        logMessage(QString("No matching dark frames found for exposure=%1s, temp=%2K (%3°C), binning=%4")
-                      .arg(lightExposure).arg(lightTemperatureK).arg(temperatureC).arg(lightBinning), "orange");
-        m_skippedCount++;
-        return true; // Continue processing without dark calibration
-    }
-    
-    logMessage(QString("Found %1 matching dark frames").arg(matchingDarks.size()), "blue");
-    
-    // Create master dark for this combination using Kelvin in filename
-    QString masterDarkName = QString("master_dark_%1s_%2K_%3.fits")
-                                .arg(lightExposure)
-                                .arg(lightTemperatureK)
-                                .arg(lightBinning);
-    QString masterDarkPath = QDir(m_calibratedDirectory).absoluteFilePath(masterDarkName);
-    
-    // Check if master dark already exists
-    if (!QFile::exists(masterDarkPath)) {
-        if (!createMasterDark(matchingDarks, masterDarkPath)) {
-            logMessage("Failed to create master dark", "red");
-            return false;
-        }
-        int temperatureC = lightTemperatureK - 273;
-        logMessage(QString("Created master dark: %1 (from %2K/%3°C data)")
-                      .arg(masterDarkName).arg(lightTemperatureK).arg(temperatureC), "green");
-    } else {
-        logMessage(QString("Using existing master dark: %1").arg(masterDarkName), "blue");
-    }
-    
-    // Apply master dark to light frame
-    QString outputName = QString("dark_calibrated_%1.fits")
-                            .arg(QFileInfo(lightFrame).baseName());
-    QString outputPath = QDir(m_calibratedDirectory).absoluteFilePath(outputName);
-    
-    if (applyMasterDark(lightFrame, masterDarkPath, outputPath)) {
-        m_darkCalibratedFiles.append(outputPath);
-        m_darkCalibratedCount++;
-        logMessage(QString("Dark calibration successful: %1").arg(outputName), "green");
-        return true;
-    } else {
-        logMessage("Dark calibration failed", "red");
-        return false;
-    }
-}
-
 // Astrometric stacking functions
 bool StellinaProcessor::createSequence(const QStringList &imageList, const QString &sequenceName) {
     if (imageList.isEmpty()) {
@@ -1308,91 +1246,6 @@ bool StellinaProcessor::stackRegisteredImages(const QStringList &registeredImage
     Q_UNUSED(outputStack)
     // Implementation would use Siril's stacking commands
     return true;
-}
-
-// Stellina image processing functions
-bool StellinaProcessor::findStellinaImages() {
-    m_imagesToProcess.clear();
-    
-    QDir sourceDir(m_sourceDirectory);
-    if (!sourceDir.exists()) {
-        logMessage(QString("Source directory does not exist: '%1'").arg(m_sourceDirectory), "red");
-        return false;
-    }
-    
-    logMessage(QString("Scanning directory: %1").arg(sourceDir.absolutePath()), "blue");
-    
-    QStringList allFiles = sourceDir.entryList(QDir::Files);
-    logMessage(QString("Found %1 total files in directory").arg(allFiles.count()), "gray");
-    
-    QStringList jsonFiles = sourceDir.entryList(QStringList() << "*.json" << "*.JSON", QDir::Files);
-    QStringList fitFiles = sourceDir.entryList(QStringList() << "*.fit", QDir::Files);
-    QStringList allFitsFiles = sourceDir.entryList(QStringList() << "*.fits", QDir::Files);
-    
-    logMessage(QString("File breakdown: %1 .json, %2 .fit, %3 .fits files")
-                  .arg(jsonFiles.count()).arg(fitFiles.count()).arg(allFitsFiles.count()), "blue");
-    
-    QStringList fitsFiles = sourceDir.entryList(QStringList() << "*.fits" << "*.fit" << "*.FITS" << "*.FIT", QDir::Files);
-    logMessage(QString("Found %1 FITS files").arg(fitsFiles.count()), "blue");
-    
-    int validPairs = 0;
-    int jsonMissing = 0;
-    int qualityRejected = 0;
-    
-    for (const QString &fitsFile : fitsFiles) {
-        QString baseName = QFileInfo(fitsFile).baseName();
-        
-        QStringList jsonCandidates = {
-            baseName + ".json",
-            baseName + ".JSON",
-            baseName + "-stacking.json",
-            baseName + "-stacking.JSON",
-            QFileInfo(fitsFile).completeBaseName() + ".json",
-            QFileInfo(fitsFile).completeBaseName() + ".JSON",
-            QFileInfo(fitsFile).completeBaseName() + "-stacking.json",
-            QFileInfo(fitsFile).completeBaseName() + "-stacking.JSON"
-        };
-        
-        QString jsonFile;
-        bool jsonFound = false;
-        
-        for (const QString &candidate : jsonCandidates) {
-            if (sourceDir.exists(candidate)) {
-                jsonFile = candidate;
-                jsonFound = true;
-                break;
-            }
-        }
-        
-        if (jsonFound) {
-            QString fitsPath = sourceDir.absoluteFilePath(fitsFile);
-            QString jsonPath = sourceDir.absoluteFilePath(jsonFile);
-            
-            if (m_qualityFilter) {
-                QJsonObject json = loadStellinaJson(jsonPath);
-                if (!json.isEmpty() && !checkStellinaQuality(json)) {
-                    qualityRejected++;
-                    if (m_debugMode) {
-                        logMessage(QString("Rejected %1: failed quality check").arg(fitsFile), "gray");
-                    }
-                    continue;
-                }
-            }
-            
-            m_imagesToProcess.append(fitsPath);
-            validPairs++;
-        } else {
-            jsonMissing++;
-            if (m_debugMode && jsonMissing <= 10) {
-                logMessage(QString("No JSON file found for %1").arg(fitsFile), "orange");
-            }
-        }
-    }
-    
-    logMessage(QString("File pairing results: %1 valid pairs, %2 missing JSON, %3 quality rejected")
-                  .arg(validPairs).arg(jsonMissing).arg(qualityRejected), "blue");
-    
-    return !m_imagesToProcess.isEmpty();
 }
 
 QJsonObject StellinaProcessor::loadStellinaJson(const QString &jsonPath) {
@@ -1876,4 +1729,585 @@ bool StellinaProcessor::createBinnedImageForPlatesolving(const QString &inputPat
     logMessage(QString("Created binned image: %1 (%2x%3 pixels)")
                   .arg(QFileInfo(binnedPath).fileName()).arg(binnedWidth).arg(binnedHeight), "green");
     return true;
+}
+
+// Modified findStellinaImages function
+bool StellinaProcessor::findStellinaImages() {
+    m_imagesToProcess.clear();
+    m_stellinaImageData.clear(); // New member variable: QList<StellinaImageData>
+    
+    QDir sourceDir(m_sourceDirectory);
+    if (!sourceDir.exists()) {
+        logMessage(QString("Source directory does not exist: '%1'").arg(m_sourceDirectory), "red");
+        return false;
+    }
+    
+    logMessage(QString("Scanning directory: %1").arg(sourceDir.absolutePath()), "blue");
+    
+    QStringList fitsFiles = sourceDir.entryList(QStringList() << "*.fits" << "*.fit" << "*.FITS" << "*.FIT", QDir::Files);
+    logMessage(QString("Found %1 FITS files").arg(fitsFiles.count()), "blue");
+    
+    int validPairs = 0;
+    int jsonMissing = 0;
+    int qualityRejected = 0;
+    
+    for (const QString &fitsFile : fitsFiles) {
+        StellinaImageData imageData;
+        imageData.originalFitsPath = sourceDir.absoluteFilePath(fitsFile);
+        imageData.currentFitsPath = imageData.originalFitsPath;
+        
+        QString baseName = QFileInfo(fitsFile).baseName();
+        
+        // Try to find corresponding JSON file
+        QStringList jsonCandidates = {
+            baseName + ".json",
+            baseName + ".JSON",
+            baseName + "-stacking.json",
+            baseName + "-stacking.JSON",
+            QFileInfo(fitsFile).completeBaseName() + ".json",
+            QFileInfo(fitsFile).completeBaseName() + ".JSON",
+            QFileInfo(fitsFile).completeBaseName() + "-stacking.json",
+            QFileInfo(fitsFile).completeBaseName() + "-stacking.JSON"
+        };
+        
+        bool jsonFound = false;
+        for (const QString &candidate : jsonCandidates) {
+            QString candidatePath = sourceDir.absoluteFilePath(candidate);
+            if (QFile::exists(candidatePath)) {
+                imageData.originalJsonPath = candidatePath;
+                jsonFound = true;
+                break;
+            }
+        }
+        
+        if (!jsonFound) {
+            jsonMissing++;
+            if (m_debugMode && jsonMissing <= 10) {
+                logMessage(QString("No JSON file found for %1").arg(fitsFile), "orange");
+            }
+            continue;
+        }
+        
+        // Load and parse JSON metadata
+        imageData.metadata = loadStellinaJson(imageData.originalJsonPath);
+        if (imageData.metadata.isEmpty()) {
+            logMessage(QString("Failed to parse JSON for %1").arg(fitsFile), "red");
+            continue;
+        }
+        
+        // Extract coordinates from JSON
+        if (!extractCoordinates(imageData.metadata, imageData.altitude, imageData.azimuth)) {
+            logMessage(QString("No coordinates found in JSON for %1").arg(fitsFile), "red");
+            continue;
+        }
+        
+        imageData.hasValidCoordinates = true;
+        
+        // Extract FITS metadata
+        imageData.exposureSeconds = extractExposureTime(imageData.originalFitsPath);
+        imageData.temperatureKelvin = extractTemperature(imageData.originalFitsPath);
+        imageData.binning = extractBinning(imageData.originalFitsPath);
+        imageData.dateObs = extractDateObs(imageData.originalFitsPath);
+        
+        // Quality filtering
+        if (m_qualityFilter && !checkStellinaQuality(imageData.metadata)) {
+            qualityRejected++;
+            if (m_debugMode) {
+                logMessage(QString("Rejected %1: failed quality check").arg(fitsFile), "gray");
+            }
+            continue;
+        }
+        
+        // Add to processing lists
+        m_imagesToProcess.append(imageData.originalFitsPath);
+        m_stellinaImageData.append(imageData);
+        validPairs++;
+        
+        if (m_debugMode) {
+            logMessage(QString("Added %1: Alt=%.2f°, Az=%.2f°, Exp=%2s, Temp=%3K")
+                          .arg(QFileInfo(fitsFile).fileName())
+                          .arg(imageData.altitude)
+                          .arg(imageData.azimuth)
+                          .arg(imageData.exposureSeconds)
+                          .arg(imageData.temperatureKelvin), "gray");
+        }
+    }
+    
+    logMessage(QString("File pairing results: %1 valid pairs, %2 missing JSON, %3 quality rejected")
+                  .arg(validPairs).arg(jsonMissing).arg(qualityRejected), "blue");
+    
+    return !m_stellinaImageData.isEmpty();
+}
+
+// Helper function to clean existing Stellina keywords
+bool StellinaProcessor::cleanExistingStellinaKeywords(const QString &fitsPath) {
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fitsPath.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READWRITE, &status)) {
+        return false;
+    }
+    
+    // List of all known Stellina-related keywords that might conflict
+    QStringList keywordsToRemove = {
+        // Previous processing keywords
+        "RA_CALC", "DEC_CALC", "ALT_ORIG", "AZ_ORIG", 
+        "QUALITY", "QUAL_RSN", "PROCSSED",
+        // Our standardized keywords (in case of re-processing)
+        "STELLALT", "STELLAZ", "STELLORIG", "STELLJSON", 
+        "STELLEXP", "STELLTEMP", "STELLSTG", "STELLTS",
+        // Other possible variants
+        "STELLINA", "STELLCOORD", "STELLDATA"
+    };
+    
+    int removedCount = 0;
+    for (const QString &keyword : keywordsToRemove) {
+        QByteArray keyBytes = keyword.toLocal8Bit();
+        int deleteStatus = 0;
+        if (fits_delete_key(fptr, keyBytes.data(), &deleteStatus) == 0) {
+            removedCount++;
+        }
+        // Ignore errors - keyword might not exist
+    }
+    
+    fits_close_file(fptr, &status);
+    
+    if (m_debugMode && removedCount > 0) {
+        logMessage(QString("Removed %1 existing Stellina keywords from: %2")
+                      .arg(removedCount)
+                      .arg(QFileInfo(fitsPath).fileName()), "gray");
+    }
+    
+    return (status == 0);
+}
+
+// Function to write Stellina metadata to FITS headers
+bool StellinaProcessor::writeStellinaMetadataToFits(const QString &fitsPath, const StellinaImageData &imageData) {
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fitsPath.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READWRITE, &status)) {
+        logMessage(QString("Failed to open FITS file for metadata writing: %1 (status: %2)").arg(fitsPath).arg(status), "red");
+        return false;
+    }
+    
+    // Clean existing Stellina keywords first
+    fits_close_file(fptr, &status);
+    cleanExistingStellinaKeywords(fitsPath);
+    
+    // Reopen for writing
+    if (fits_open_file(&fptr, pathBytes.data(), READWRITE, &status)) {
+        logMessage(QString("Failed to reopen FITS file for metadata writing: %1").arg(fitsPath), "red");
+        return false;
+    }
+    
+    // Write Stellina-specific keywords with our standardized names
+    double alt = imageData.altitude;
+    double az = imageData.azimuth;
+    
+    if (fits_write_key(fptr, TDOUBLE, "STELLALT", &alt, "Stellina altitude (degrees)", &status) ||
+        fits_write_key(fptr, TDOUBLE, "STELLAZ", &az, "Stellina azimuth (degrees)", &status)) {
+        logMessage("Warning: Could not write Stellina coordinates to FITS header", "orange");
+        status = 0; // Continue anyway
+    }
+    
+    // Write original file paths (relative names only for portability)
+    QString origFitsRelative = QFileInfo(imageData.originalFitsPath).fileName();
+    QString origJsonRelative = QFileInfo(imageData.originalJsonPath).fileName();
+    
+    QByteArray origFitsBytes = origFitsRelative.toLocal8Bit();
+    QByteArray origJsonBytes = origJsonRelative.toLocal8Bit();
+    char* origFitsPtr = origFitsBytes.data();
+    char* origJsonPtr = origJsonBytes.data();
+    
+    if (fits_write_key(fptr, TSTRING, "STELLORIG", &origFitsPtr, "Original Stellina FITS file", &status) ||
+        fits_write_key(fptr, TSTRING, "STELLJSON", &origJsonPtr, "Original Stellina JSON file", &status)) {
+        logMessage("Warning: Could not write original file references", "orange");
+        status = 0;
+    }
+    
+    // Write exposure and temperature for easier matching
+    int exposure = imageData.exposureSeconds;
+    int temperature = imageData.temperatureKelvin;
+    
+    if (fits_write_key(fptr, TINT, "STELLEXP", &exposure, "Stellina exposure (seconds)", &status) ||
+        fits_write_key(fptr, TINT, "STELLTEMP", &temperature, "Stellina temperature (Kelvin)", &status)) {
+        logMessage("Warning: Could not write exposure/temperature metadata", "orange");
+        status = 0;
+    }
+    
+    // Write processing stage
+    QString processingStage = "RAW";
+    QByteArray stageBytes = processingStage.toLocal8Bit();
+    char* stagePtr = stageBytes.data();
+    
+    if (fits_write_key(fptr, TSTRING, "STELLSTG", &stagePtr, "Stellina processing stage", &status)) {
+        logMessage("Warning: Could not write processing stage", "orange");
+        status = 0;
+    }
+    
+    // Write processing timestamp
+    QString timestamp = QDateTime::currentDateTime().toString(Qt::ISODate);
+    QByteArray timestampBytes = timestamp.toLocal8Bit();
+    char* timestampPtr = timestampBytes.data();
+    
+    if (fits_write_key(fptr, TSTRING, "STELLTS", &timestampPtr, "Stellina processing timestamp", &status)) {
+        logMessage("Warning: Could not write timestamp", "orange");
+        status = 0;
+    }
+    
+    // Add processing history
+    QString historyComment = QString("Stellina metadata embedded: Alt=%.2f°, Az=%.2f°, Exp=%1s")
+                                .arg(exposure)
+                                .arg(imageData.altitude)
+                                .arg(imageData.azimuth);
+    QByteArray historyBytes = historyComment.toLocal8Bit();
+    if (fits_write_history(fptr, historyBytes.data(), &status)) {
+        // Non-critical error
+        logMessage("Warning: Could not write processing history", "orange");
+        status = 0;
+    }
+    
+    fits_close_file(fptr, &status);
+    
+    if (status != 0) {
+        logMessage(QString("FITS error during metadata writing (error: %1)").arg(status), "red");
+        return false;
+    }
+    
+    if (m_debugMode) {
+        logMessage(QString("Wrote Stellina metadata to: %1").arg(QFileInfo(fitsPath).fileName()), "gray");
+    }
+    
+    return true;
+}
+
+// Function to read Stellina metadata from FITS headers
+bool StellinaProcessor::readStellinaMetadataFromFits(const QString &fitsPath, StellinaImageData &imageData) {
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fitsPath.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
+        logMessage(QString("Failed to open FITS file for metadata reading: %1 (status: %2)").arg(fitsPath).arg(status), "red");
+        return false;
+    }
+    
+    // Read Stellina coordinates
+    double alt, az;
+    if (fits_read_key(fptr, TDOUBLE, "STELLALT", &alt, nullptr, &status) == 0 &&
+        fits_read_key(fptr, TDOUBLE, "STELLAZ", &az, nullptr, &status) == 0) {
+        imageData.altitude = alt;
+        imageData.azimuth = az;
+        imageData.hasValidCoordinates = true;
+    } else {
+        logMessage(QString("No Stellina coordinates found in FITS header: %1").arg(QFileInfo(fitsPath).fileName()), "orange");
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    // Read exposure and temperature
+    int exposure, temperature;
+    if (fits_read_key(fptr, TINT, "STELLEXP", &exposure, nullptr, &status) == 0) {
+        imageData.exposureSeconds = exposure;
+    }
+    status = 0; // Reset for next read
+    
+    if (fits_read_key(fptr, TINT, "STELLTEMP", &temperature, nullptr, &status) == 0) {
+        imageData.temperatureKelvin = temperature;
+    }
+    status = 0;
+    
+    // Read original file paths
+    char origFits[FLEN_VALUE], origJson[FLEN_VALUE];
+    if (fits_read_key(fptr, TSTRING, "STELLORIG", origFits, nullptr, &status) == 0) {
+        // Convert back to full path (assuming same directory)
+        QDir sourceDir(QFileInfo(fitsPath).dir());
+        imageData.originalFitsPath = sourceDir.absoluteFilePath(QString::fromLatin1(origFits).trimmed().remove('\'')); 
+    }
+    status = 0;
+    
+    if (fits_read_key(fptr, TSTRING, "STELLJSON", origJson, nullptr, &status) == 0) {
+        QDir sourceDir(QFileInfo(imageData.originalFitsPath).dir());
+        imageData.originalJsonPath = sourceDir.absoluteFilePath(QString::fromLatin1(origJson).trimmed().remove('\''));
+    }
+    
+    // Update current path
+    imageData.currentFitsPath = fitsPath;
+    
+    // Read DATE-OBS if not already set
+    if (imageData.dateObs.isEmpty()) {
+        imageData.dateObs = extractDateObs(fitsPath);
+    }
+    
+    fits_close_file(fptr, &status);
+    
+    if (m_debugMode) {
+        logMessage(QString("Read Stellina metadata from: %1 (Alt=%.2f°, Az=%.2f°)")
+                      .arg(QFileInfo(fitsPath).fileName())
+                      .arg(imageData.altitude)
+                      .arg(imageData.azimuth), "gray");
+    }
+    
+    return true;
+}
+
+// Modified dark calibration function
+bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
+    m_currentTaskLabel->setText("Dark calibration...");
+    
+    // Find the corresponding StellinaImageData
+    StellinaImageData imageData;
+    bool found = false;
+    
+    for (int i = 0; i < m_stellinaImageData.size(); ++i) {
+        if (m_stellinaImageData[i].currentFitsPath == lightFrame || 
+            m_stellinaImageData[i].originalFitsPath == lightFrame) {
+            imageData = m_stellinaImageData[i];
+            found = true;
+            break;
+        }
+    }
+    
+    if (!found) {
+        logMessage(QString("No metadata found for light frame: %1").arg(QFileInfo(lightFrame).fileName()), "red");
+        return false;
+    }
+    
+    // Use metadata from imageData instead of extracting again
+    int lightExposure = imageData.exposureSeconds;
+    int lightTemperatureK = imageData.temperatureKelvin;
+    QString lightBinning = imageData.binning;
+    
+    if (lightExposure <= 0) {
+        logMessage("Invalid exposure time in image metadata", "red");
+        return false;
+    }
+    
+    // Find matching dark frames
+    QStringList matchingDarks = findAllMatchingDarkFrames(lightExposure, lightTemperatureK, lightBinning);
+    
+    if (matchingDarks.isEmpty()) {
+        int temperatureC = lightTemperatureK - 273;
+        logMessage(QString("No matching dark frames found for exposure=%1s, temp=%2K (%3°C), binning=%4")
+                      .arg(lightExposure).arg(lightTemperatureK).arg(temperatureC).arg(lightBinning), "orange");
+        
+        // Write metadata to original file even if no dark calibration is performed
+        if (!writeStellinaMetadataToFits(lightFrame, imageData)) {
+            logMessage("Failed to write metadata to original FITS file", "red");
+        }
+        
+        m_skippedCount++;
+        return true; // Continue processing without dark calibration
+    }
+    
+    logMessage(QString("Found %1 matching dark frames").arg(matchingDarks.size()), "blue");
+    
+    // Create master dark
+    QString masterDarkName = QString("master_dark_%1s_%2K_%3.fits")
+                                .arg(lightExposure)
+                                .arg(lightTemperatureK)
+                                .arg(lightBinning);
+    QString masterDarkPath = QDir(m_calibratedDirectory).absoluteFilePath(masterDarkName);
+    
+    if (!QFile::exists(masterDarkPath)) {
+        if (!createMasterDark(matchingDarks, masterDarkPath)) {
+            logMessage("Failed to create master dark", "red");
+            return false;
+        }
+        int temperatureC = lightTemperatureK - 273;
+        logMessage(QString("Created master dark: %1 (from %2K/%3°C data)")
+                      .arg(masterDarkName).arg(lightTemperatureK).arg(temperatureC), "green");
+    } else {
+        logMessage(QString("Using existing master dark: %1").arg(masterDarkName), "blue");
+    }
+    
+    // Apply master dark
+    QString outputName = QString("dark_calibrated_%1.fits")
+                            .arg(QFileInfo(lightFrame).baseName());
+    QString outputPath = QDir(m_calibratedDirectory).absoluteFilePath(outputName);
+    
+    if (applyMasterDark(lightFrame, masterDarkPath, outputPath)) {
+        // Write Stellina metadata to the calibrated file
+        StellinaImageData calibratedImageData = imageData;
+        calibratedImageData.currentFitsPath = outputPath;
+        
+        if (!writeStellinaMetadataToFits(outputPath, calibratedImageData)) {
+            logMessage("Warning: Failed to write metadata to calibrated FITS file", "orange");
+        } else {
+            // Update processing stage in the metadata
+            updateProcessingStage(outputPath, "DARK_CALIBRATED");
+        }
+        
+        // Update the tracking data structure
+        for (int i = 0; i < m_stellinaImageData.size(); ++i) {
+            if (m_stellinaImageData[i].originalFitsPath == imageData.originalFitsPath) {
+                m_stellinaImageData[i].currentFitsPath = outputPath;
+                break;
+            }
+        }
+        
+        m_darkCalibratedFiles.append(outputPath);
+        m_darkCalibratedCount++;
+        logMessage(QString("Dark calibration successful: %1").arg(outputName), "green");
+        return true;
+    } else {
+        logMessage("Dark calibration failed", "red");
+        return false;
+    }
+}
+
+// Modified plate solving function
+bool StellinaProcessor::processImagePlatesolving(const QString &fitsPath) {
+    m_currentTaskLabel->setText("Plate solving...");
+    
+    // Try to read Stellina metadata from FITS headers first
+    StellinaImageData imageData;
+    bool hasMetadata = readStellinaMetadataFromFits(fitsPath, imageData);
+    
+    if (!hasMetadata) {
+        // Fallback: try to find in our tracking structure
+        bool found = false;
+        for (const StellinaImageData &data : m_stellinaImageData) {
+            if (data.currentFitsPath == fitsPath) {
+                imageData = data;
+                hasMetadata = true;
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found) {
+            logMessage(QString("No Stellina metadata found for: %1").arg(QFileInfo(fitsPath).fileName()), "red");
+            return false;
+        }
+    }
+    
+    if (!imageData.hasValidCoordinates) {
+        logMessage("No valid coordinates in image metadata", "red");
+        return false;
+    }
+    
+    // Convert Alt/Az to RA/Dec using metadata
+    double ra, dec;
+    if (!convertAltAzToRaDec(imageData.altitude, imageData.azimuth, imageData.dateObs, ra, dec)) {
+        logMessage("Failed to convert coordinates", "red");
+        return false;
+    }
+    
+    // Determine output path
+    QString baseName = QFileInfo(imageData.originalFitsPath).baseName();
+    QString outputName = QString("processed_%1.fits").arg(baseName);
+    QString outputPath = QDir(m_plateSolvedDirectory).absoluteFilePath(outputName);
+    
+    // Choose image for plate solving (prefer binned if available)
+    QString plateSolvingImage = fitsPath;
+    QString binnedName = QString("binned_%1").arg(QFileInfo(fitsPath).fileName());
+    QString binnedPath = QDir(QFileInfo(fitsPath).dir()).absoluteFilePath(binnedName);
+    
+    if (QFile::exists(binnedPath)) {
+        plateSolvingImage = binnedPath;
+        logMessage(QString("Using binned image for plate solving: %1").arg(QFileInfo(binnedPath).fileName()), "blue");
+    }
+    
+    // Perform plate solving
+    bool platesolveSuccess = false;
+    QString usedMethod = "";
+    
+    logMessage(QString("Plate solving with solve-field: RA=%1°, Dec=%2°").arg(ra, 0, 'f', 4).arg(dec, 0, 'f', 4), "blue");
+    
+    platesolveSuccess = runSolveField(plateSolvingImage, outputPath, ra, dec);
+    
+    if (platesolveSuccess) {
+        usedMethod = "solve-field";
+        logMessage("solve-field plate solving succeeded!", "green");
+    } else {
+        logMessage("solve-field failed, trying Siril fallback...", "orange");
+        
+        // Fallback to Siril
+        if (m_sirilClient->isConnected()) {
+            if (m_sirilClient->loadImage(plateSolvingImage)) {
+                double plateSolvingPixelSize = (plateSolvingImage == binnedPath) ? m_pixelSize * 2.0 : m_pixelSize;
+                platesolveSuccess = m_sirilClient->platesolve(ra, dec, m_focalLength, plateSolvingPixelSize, true);
+                
+                if (platesolveSuccess) {
+                    usedMethod = "Siril (fallback)";
+                    logMessage("Siril fallback plate solving succeeded!", "green");
+                    
+                    if (!m_sirilClient->saveImage(outputPath)) {
+                        logMessage("Failed to save Siril processed image", "red");
+                        m_sirilClient->closeImage();
+                        return false;
+                    }
+                } else {
+                    logMessage(QString("Siril fallback also failed: %1").arg(m_sirilClient->lastError()), "red");
+                }
+                
+                m_sirilClient->closeImage();
+            }
+        }
+    }
+    
+    if (!platesolveSuccess) {
+        logMessage("Both solve-field and Siril failed to plate solve image", "red");
+        return false;
+    }
+    
+    // Write metadata to plate-solved file
+    StellinaImageData plateSolvedImageData = imageData;
+    plateSolvedImageData.currentFitsPath = outputPath;
+    
+    if (!writeStellinaMetadataToFits(outputPath, plateSolvedImageData)) {
+        logMessage("Warning: Failed to write metadata to plate-solved FITS file", "orange");
+    } else {
+        updateProcessingStage(outputPath, "PLATE_SOLVED");
+    }
+    
+    // Update tracking structure
+    for (int i = 0; i < m_stellinaImageData.size(); ++i) {
+        if (m_stellinaImageData[i].originalFitsPath == imageData.originalFitsPath) {
+            m_stellinaImageData[i].currentFitsPath = outputPath;
+            break;
+        }
+    }
+    
+    m_plateSolvedFiles.append(outputPath);
+    logMessage(QString("Image successfully plate solved using %1").arg(usedMethod), "green");
+    return true;
+}
+
+// Helper function to find image data by file path
+StellinaImageData* StellinaProcessor::findImageDataByPath(const QString &path) {
+    for (int i = 0; i < m_stellinaImageData.size(); ++i) {
+        if (m_stellinaImageData[i].currentFitsPath == path || 
+            m_stellinaImageData[i].originalFitsPath == path) {
+            return &m_stellinaImageData[i];
+        }
+    }
+    return nullptr;
+}
+
+// Helper function to update processing stage
+bool StellinaProcessor::updateProcessingStage(const QString &fitsPath, const QString &stage) {
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fitsPath.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READWRITE, &status)) {
+        return false;
+    }
+    
+    QByteArray stageBytes = stage.toLocal8Bit();
+    char* stagePtr = stageBytes.data();
+    
+    if (fits_update_key(fptr, TSTRING, "STELLSTG", &stagePtr, "Stellina processing stage", &status)) {
+        // If update fails, try writing as new key
+        status = 0;
+        fits_write_key(fptr, TSTRING, "STELLSTG", &stagePtr, "Stellina processing stage", &status);
+    }
+    
+    fits_close_file(fptr, &status);
+    return (status == 0);
 }
