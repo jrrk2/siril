@@ -105,6 +105,32 @@ void StellinaProcessor::connectSignals() {
         m_stackingParams.outputFormat = text;
         onStackingParametersChanged();
     });
+
+    // Mount tilt correction signals
+    connect(m_enableTiltCorrectionCheck, &QCheckBox::toggled, [this](bool checked) {
+	m_mountTilt.enableCorrection = checked;
+	updateTiltUI();
+	saveMountTiltToSettings();
+    });
+
+    connect(m_northTiltSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
+	    [this](double value) {
+	m_mountTilt.northTilt = value;
+	saveMountTiltToSettings();
+    });
+
+    connect(m_eastTiltSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
+	    [this](double value) {
+	m_mountTilt.eastTilt = value;
+	saveMountTiltToSettings();
+    });
+
+    connect(m_calibrateTiltButton, &QPushButton::clicked, 
+	    this, &StellinaProcessor::calibrateMountTilt);
+
+    connect(m_testTiltButton, &QPushButton::clicked, 
+	    this, &StellinaProcessor::testMountTiltCorrection);
+    
 }
 
 // UI Event Handlers
@@ -388,5 +414,25 @@ void StellinaProcessor::logMessage(const QString &message, const QString &color)
     
     if (color == "red" || color == "green" || color == "blue") {
         m_statusLabel->setText(message);
+    }
+}
+
+
+void StellinaProcessor::updateTiltUI() {
+    bool enabled = m_mountTilt.enableCorrection;
+    
+    m_northTiltSpin->setEnabled(enabled);
+    m_eastTiltSpin->setEnabled(enabled);
+    m_calibrateTiltButton->setEnabled(enabled);
+    m_testTiltButton->setEnabled(enabled);
+    
+    if (enabled) {
+        m_tiltStatusLabel->setText(QString("Tilt correction enabled: θ_N=%1°, θ_E=%2°")
+                                      .arg(m_mountTilt.northTilt, 0, 'f', 4)
+                                      .arg(m_mountTilt.eastTilt, 0, 'f', 4));
+        m_tiltStatusLabel->setStyleSheet("color: green; font-weight: bold;");
+    } else {
+        m_tiltStatusLabel->setText("Tilt correction disabled");
+        m_tiltStatusLabel->setStyleSheet("color: gray; font-style: italic;");
     }
 }

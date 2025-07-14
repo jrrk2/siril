@@ -91,6 +91,7 @@ struct StellinaImageData {
     }
 };
 
+
 class StellinaProcessor : public QMainWindow {
     Q_OBJECT
 
@@ -143,6 +144,17 @@ private slots:
     void onProcessingTimer();
 
 private:
+
+// Mount tilt correction parameters
+struct MountTiltParams {
+    double northTilt;     // North tilt θ_N in degrees
+    double eastTilt;      // East tilt θ_E in degrees
+    bool enableCorrection; // Whether to apply tilt correction
+    
+    MountTiltParams() : northTilt(1.0832), eastTilt(2.4314), enableCorrection(false) {}
+};
+    MountTiltParams m_mountTilt;
+
     void setupUI();
     void setupBasicTab();
     void setupDarkTab();
@@ -176,6 +188,13 @@ void altAzToRaDec_HourAngleTest(double alt, double az, double lat, double lst,
   void altAzToRaDec_Standard(double alt, double az, double lat, double lst, double &ra, double &dec);
   void altAzToRaDec_StellinaFixed(double alt, double az, double lat, double lst, double &ra, double &dec) ;
   void testAllCoordinateVariations() ;
+// Mount tilt correction functions
+void applyMountTiltCorrection(double &alt, double &az, double inputAlt, double inputAz);
+void calibrateMountTilt();
+void testMountTiltCorrection();
+bool loadMountTiltFromSettings();
+void saveMountTiltToSettings();
+void updateTiltUI();
     
     // Dark calibration functions
     void scanDarkFrames();
@@ -302,7 +321,16 @@ void altAzToRaDec_HourAngleTest(double alt, double az, double lat, double lst,
     QTextEdit *m_logTextEdit;
     QPushButton *m_clearLogButton;
     QPushButton *m_saveLogButton;
-    
+
+    // Mount tilt correction UI
+    QGroupBox *m_mountTiltGroup;
+    QCheckBox *m_enableTiltCorrectionCheck;
+    QDoubleSpinBox *m_northTiltSpin;
+    QDoubleSpinBox *m_eastTiltSpin;
+    QPushButton *m_calibrateTiltButton;
+    QPushButton *m_testTiltButton;
+    QLabel *m_tiltStatusLabel;
+  
     // Status bar
     QLabel *m_statusLabel;
     QLabel *m_memoryUsageLabel;

@@ -140,6 +140,42 @@ void StellinaProcessor::setupBasicTab() {
     basicOptionsLayout->addWidget(new QLabel("Observer Location:"), 4, 0);
     m_observerLocationEdit = new QLineEdit("London");
     basicOptionsLayout->addWidget(m_observerLocationEdit, 4, 1);
+
+    // Mount tilt correction group
+    m_mountTiltGroup = new QGroupBox("Mount Tilt Correction");
+    QGridLayout *tiltLayout = new QGridLayout(m_mountTiltGroup);
+
+    m_enableTiltCorrectionCheck = new QCheckBox("Enable mount tilt correction");
+    m_enableTiltCorrectionCheck->setChecked(false);
+    tiltLayout->addWidget(m_enableTiltCorrectionCheck, 0, 0, 1, 3);
+
+    tiltLayout->addWidget(new QLabel("North Tilt θ_N (°):"), 1, 0);
+    m_northTiltSpin = new QDoubleSpinBox;
+    m_northTiltSpin->setRange(-10.0, 10.0);
+    m_northTiltSpin->setValue(1.0832);  // Default from your analysis
+    m_northTiltSpin->setDecimals(4);
+    m_northTiltSpin->setSuffix("°");
+    tiltLayout->addWidget(m_northTiltSpin, 1, 1);
+
+    tiltLayout->addWidget(new QLabel("East Tilt θ_E (°):"), 2, 0);
+    m_eastTiltSpin = new QDoubleSpinBox;
+    m_eastTiltSpin->setRange(-10.0, 10.0);
+    m_eastTiltSpin->setValue(2.4314);   // Default from your analysis
+    m_eastTiltSpin->setDecimals(4);
+    m_eastTiltSpin->setSuffix("°");
+    tiltLayout->addWidget(m_eastTiltSpin, 2, 1);
+
+    QHBoxLayout *tiltButtonLayout = new QHBoxLayout;
+    m_calibrateTiltButton = new QPushButton("Calibrate Tilt");
+    m_testTiltButton = new QPushButton("Test Correction");
+    tiltButtonLayout->addWidget(m_calibrateTiltButton);
+    tiltButtonLayout->addWidget(m_testTiltButton);
+    tiltButtonLayout->addStretch();
+    tiltLayout->addLayout(tiltButtonLayout, 3, 0, 1, 3);
+
+    m_tiltStatusLabel = new QLabel("Tilt correction disabled");
+    m_tiltStatusLabel->setStyleSheet("color: gray; font-style: italic;");
+    tiltLayout->addWidget(m_tiltStatusLabel, 4, 0, 1, 3);
     
     // Processing group
     m_processingGroup = new QGroupBox("Processing Control");
@@ -186,6 +222,7 @@ void StellinaProcessor::setupBasicTab() {
     layout->addWidget(m_modeGroup);
     layout->addWidget(m_inputGroup);
     layout->addWidget(m_basicOptionsGroup);
+    layout->addWidget(m_mountTiltGroup);
     layout->addWidget(m_processingGroup);
     layout->addWidget(m_advancedInfoGroup);
     layout->addStretch();
@@ -350,6 +387,21 @@ void StellinaProcessor::setupMenu() {
     toolsMenu->addAction("Test &Connection", this, &StellinaProcessor::onTestConnection);
     toolsMenu->addAction("&Refresh Dark Frames", this, &StellinaProcessor::onRefreshDarkFrames);
     toolsMenu->addSeparator();
+
+    // Mount tilt menu items
+    QMenu *tiltMenu = toolsMenu->addMenu("Mount &Tilt");
+    tiltMenu->addAction("&Calibrate Mount Tilt", this, &StellinaProcessor::calibrateMountTilt);
+    tiltMenu->addAction("&Test Tilt Correction", this, &StellinaProcessor::testMountTiltCorrection);
+    tiltMenu->addSeparator();
+    tiltMenu->addAction("Enable Tilt Correction", [this]() {
+        m_mountTilt.enableCorrection = !m_mountTilt.enableCorrection;
+        m_enableTiltCorrectionCheck->setChecked(m_mountTilt.enableCorrection);
+        updateTiltUI();
+        saveMountTiltToSettings();
+    });
+    
+    toolsMenu->addSeparator();
+
     toolsMenu->addAction("&Clear Log", this, &StellinaProcessor::onClearLog);
 
     toolsMenu->addAction("Diagnose Sidereal Time", this, &StellinaProcessor::diagnoseSiderealTimeIssues);

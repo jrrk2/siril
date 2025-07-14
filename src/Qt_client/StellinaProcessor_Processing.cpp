@@ -673,7 +673,7 @@ bool StellinaProcessor::runSolveField(const QString &fitsPath, const QString &ou
     arguments << "--scale-high" << "1.3";  // solve-field will auto-adjust for downsampling
     arguments << "--ra" << QString::number(ra, 'f', 6);     // Use calculated RA
     arguments << "--dec" << QString::number(dec, 'f', 6);   // Use calculated Dec
-    arguments << "--radius" << "5.0";      // Small search radius since we have good hints
+    arguments << "--radius" << "10.0";      // Small search radius since we have good hints
     arguments << "--cpulimit" << "60";     // 1 minute timeout (faster with hints)
     arguments << "--no-verify";           // Skip verification step
     arguments << "--crpix-center";        // Set reference pixel at center

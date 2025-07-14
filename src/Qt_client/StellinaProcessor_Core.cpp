@@ -44,6 +44,13 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
     , m_temperatureTolerance(5)
     , m_exposureTolerance(10)
     , m_sequenceName("stellina_sequence")
+    , m_mountTiltGroup(nullptr)           // Initialize UI pointers to nullptr
+    , m_enableTiltCorrectionCheck(nullptr)
+    , m_northTiltSpin(nullptr)
+    , m_eastTiltSpin(nullptr)
+    , m_calibrateTiltButton(nullptr)
+    , m_testTiltButton(nullptr)
+    , m_tiltStatusLabel(nullptr)
 {
     setWindowTitle("Enhanced Stellina Processor for Siril - v2.0");
     setMinimumSize(1000, 800);
@@ -911,6 +918,7 @@ void StellinaProcessor::loadSettings() {
     m_pixelSize = settings.value("pixelSize", 2.40).toDouble();
     m_observerLocation = settings.value("observerLocation", "London").toString();
     m_processingMode = static_cast<ProcessingMode>(settings.value("processingMode", 0).toInt());
+    loadMountTiltFromSettings();
     
     // Update UI with loaded settings
     m_sourceDirectoryEdit->setText(m_sourceDirectory);
@@ -923,6 +931,10 @@ void StellinaProcessor::loadSettings() {
     m_pixelSizeSpin->setValue(m_pixelSize);
     m_observerLocationEdit->setText(m_observerLocation);
     m_processingModeCombo->setCurrentIndex(m_processingMode);
+    m_enableTiltCorrectionCheck->setChecked(m_mountTilt.enableCorrection);
+    m_northTiltSpin->setValue(m_mountTilt.northTilt);
+    m_eastTiltSpin->setValue(m_mountTilt.eastTilt);
+    updateTiltUI();
 }
 
 void StellinaProcessor::saveSettings() {
@@ -2896,124 +2908,6 @@ void StellinaProcessor::diagnoseSiderealTimeIssues() {
     logMessage("=== END DIAGNOSTIC ===", "blue");
 }
 
-bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec) {
-    // Parse observer location from settings (default to London if not set)
-    QStringList locationParts = m_observerLocation.split(',');
-    double observer_lat = 51.5074;  // London latitude (degrees)
-    double observer_lon = -0.1278;  // London longitude (degrees)
-    
-    // Try to parse observer location if it's in "lat,lon" format
-    if (locationParts.size() >= 2) {
-        bool ok1, ok2;
-        double lat = locationParts[0].trimmed().toDouble(&ok1);
-        double lon = locationParts[1].trimmed().toDouble(&ok2);
-        if (ok1 && ok2) {
-            observer_lat = lat;
-            observer_lon = lon;
-        }
-    }
-    
-    if (m_debugMode) {
-        logMessage(QString("Using observer location: lat=%1°, lon=%2°")
-                      .arg(observer_lat, 0, 'f', 4)
-                      .arg(observer_lon, 0, 'f', 4), "gray");
-    }
-    
-    // Parse observation time from FITS DATE-OBS header
-    if (m_debugMode) {
-        logMessage(QString("Raw dateObs parameter: '%1' (length: %2)").arg(dateObs).arg(dateObs.length()), "gray");
-    }
-    
-    QDateTime obsTime;
-    if (!dateObs.isEmpty()) {
-        // Try different date formats that might be in FITS headers
-        QStringList formats = {
-            "yyyy-MM-ddThh:mm:ss.zzz",
-            "yyyy-MM-ddThh:mm:ss.zzzZ",
-            "yyyy-MM-ddThh:mm:ss",
-            "yyyy-MM-ddThh:mm:ssZ",
-            "yyyy-MM-dd hh:mm:ss.zzz",
-            "yyyy-MM-dd hh:mm:ss",
-            "yyyy-MM-dd"
-        };
-        
-        for (const QString &format : formats) {
-            obsTime = QDateTime::fromString(dateObs, format);
-            if (obsTime.isValid()) {
-                // Ensure we're working in UTC
-                obsTime.setTimeSpec(Qt::UTC);
-                break;
-            }
-        }
-    }
-    
-    if (!obsTime.isValid()) {
-        logMessage(QString("ERROR: Could not parse observation time '%1' - coordinate conversion requires accurate time").arg(dateObs), "red");
-        logMessage("Supported time formats: yyyy-MM-ddThh:mm:ss.zzz, yyyy-MM-ddThh:mm:ss, yyyy-MM-dd hh:mm:ss", "red");
-        return false;
-    }
-    
-    if (m_debugMode) {
-        logMessage(QString("Observation time: %1").arg(obsTime.toString(Qt::ISODate)), "gray");
-    }
-    
-    // Calculate Julian Date using proven method
-    double jd = calculateJD(obsTime.date().year(),
-                           obsTime.date().month(),
-                           obsTime.date().day(),
-                           obsTime.time().hour(),
-                           obsTime.time().minute(),
-                           obsTime.time().second());
-    
-    if (m_debugMode) {
-        logMessage(QString("Julian Day: %1").arg(jd, 0, 'f', 6), "gray");
-    }
-    
-    // Calculate Local Sidereal Time using proven method
-    double lst = calculateLST(jd, observer_lon);
-    if (m_debugMode) {
-        logMessage(QString("Local Sidereal Time: %1 hours (%2°)")
-                      .arg(lst, 0, 'f', 4)
-                      .arg(lst * 15.0, 0, 'f', 2), "gray");
-    }
-    
-    // Convert Alt/Az to RA/Dec using proven method
-    altAzToRaDec(alt, az, observer_lat, lst, ra, dec);
-    
-    if (m_debugMode) {
-        logMessage(QString("Coordinate conversion using proven algorithm:"), "blue");
-        logMessage(QString("  Input Alt/Az: %1°, %2°").arg(alt, 0, 'f', 4).arg(az, 0, 'f', 4), "blue");
-        logMessage(QString("  Observer: %1°N, %2°E").arg(observer_lat, 0, 'f', 4).arg(observer_lon, 0, 'f', 4), "blue");
-        logMessage(QString("  Time: %1 (JD %2)").arg(obsTime.toString(Qt::ISODate)).arg(jd, 0, 'f', 6), "blue");
-        logMessage(QString("  LST: %1 hours").arg(lst, 0, 'f', 4), "blue");
-        logMessage(QString("  Result RA/Dec: %1°, %2°").arg(ra, 0, 'f', 6).arg(dec, 0, 'f', 6), "blue");
-        
-        // Also show in hours:minutes:seconds format for RA
-        double ra_hours = ra / 15.0;  // Convert degrees to hours
-        int h = static_cast<int>(ra_hours);
-        int m = static_cast<int>((ra_hours - h) * 60);
-        double s = ((ra_hours - h) * 60 - m) * 60;
-        logMessage(QString("  RA in HMS: %1h %2m %3s").arg(h).arg(m).arg(s, 0, 'f', 2), "blue");
-        
-        // Show declination in degrees:arcminutes:arcseconds
-        int d = static_cast<int>(dec);
-        int am = static_cast<int>(qAbs(dec - d) * 60);
-        double as = (qAbs(dec - d) * 60 - am) * 60;
-        logMessage(QString("  Dec in DMS: %1° %2' %3\"").arg(d).arg(am).arg(as, 0, 'f', 1), "blue");
-    }
-    
-    // Sanity check the results
-    if (ra < 0 || ra >= 360.0) {
-        logMessage(QString("Warning: RA out of range: %1°").arg(ra), "orange");
-    }
-    
-    if (dec < -90.0 || dec > 90.0) {
-        logMessage(QString("Warning: Dec out of range: %1°").arg(dec), "orange");
-    }
-    
-    return true;
-}
-
 // HIGH-PRECISION SIDEREAL TIME CALCULATION
 // This fixes the time drift issue seen in your plot
 double StellinaProcessor::calculateLST_HighPrecision(double JD, double longitude) {
@@ -3626,4 +3520,329 @@ void StellinaProcessor::analyzeCoordinateDrift() {
         logMessage("", "gray");
         logMessage("DIAGNOSIS: Time drift within acceptable limits", "green");
     }
+}
+
+// Add these function implementations to StellinaProcessor_Core.cpp
+
+void StellinaProcessor::applyMountTiltCorrection(double &alt, double &az, double inputAlt, double inputAz) {
+    if (!m_mountTilt.enableCorrection) {
+        alt = inputAlt;
+        az = inputAz;
+        return;
+    }
+    
+    // Convert tilt parameters to radians
+    const double theta_N = m_mountTilt.northTilt * DEG_TO_RAD;
+    const double theta_E = m_mountTilt.eastTilt * DEG_TO_RAD;
+    
+    // Convert input coordinates to radians
+    const double input_az_rad = inputAz * DEG_TO_RAD;
+    
+    // Apply tilt correction model (based on tilt.py algorithm)
+    // The correction assumes small angle approximations for mount tilt
+    
+    // Calculate tilt corrections in Alt/Az space
+    const double delta_alt = theta_N * cos(input_az_rad) + theta_E * sin(input_az_rad);
+    const double delta_az = (theta_E * cos(input_az_rad) - theta_N * sin(input_az_rad)) / 
+                           tan(inputAlt * DEG_TO_RAD);
+    
+    // Apply corrections (convert delta_az back to degrees)
+    alt = inputAlt + (delta_alt * RAD_TO_DEG);
+    az = inputAz + (delta_az * RAD_TO_DEG);
+    
+    // Normalize azimuth to [0, 360) range
+    while (az < 0.0) az += 360.0;
+    while (az >= 360.0) az -= 360.0;
+    
+    // Clamp altitude to valid range [-90, 90]
+    if (alt > 90.0) alt = 90.0;
+    if (alt < -90.0) alt = -90.0;
+    
+    if (m_debugMode) {
+        logMessage(QString("Mount tilt correction applied:"), "blue");
+        logMessage(QString("  Input Alt/Az: %1°, %2°")
+                      .arg(inputAlt, 0, 'f', 4)
+                      .arg(inputAz, 0, 'f', 4), "gray");
+        logMessage(QString("  Tilt params: θ_N=%1°, θ_E=%2°")
+                      .arg(m_mountTilt.northTilt, 0, 'f', 4)
+                      .arg(m_mountTilt.eastTilt, 0, 'f', 4), "gray");
+        logMessage(QString("  Corrections: Δalt=%1°, Δaz=%2°")
+                      .arg(delta_alt * RAD_TO_DEG, 0, 'f', 4)
+                      .arg(delta_az * RAD_TO_DEG, 0, 'f', 4), "gray");
+        logMessage(QString("  Corrected Alt/Az: %1°, %2°")
+                      .arg(alt, 0, 'f', 4)
+                      .arg(az, 0, 'f', 4), "blue");
+    }
+}
+
+void StellinaProcessor::calibrateMountTilt() {
+    logMessage("=== MOUNT TILT CALIBRATION ===", "blue");
+    
+    // This would typically be run after collecting plate solving results
+    // For now, set the values from your tilt.py analysis
+    
+    // Values from your tilt analysis: θ_N = 1.0832°, θ_E = 2.4314°
+    m_mountTilt.northTilt = 1.0832;  // degrees
+    m_mountTilt.eastTilt = 2.4314;   // degrees
+    m_mountTilt.enableCorrection = true;
+    
+    logMessage(QString("Mount tilt parameters set:"), "green");
+    logMessage(QString("  North tilt θ_N = %1°").arg(m_mountTilt.northTilt, 0, 'f', 4), "blue");
+    logMessage(QString("  East tilt θ_E = %1°").arg(m_mountTilt.eastTilt, 0, 'f', 4), "blue");
+    logMessage(QString("  Correction enabled: %1").arg(m_mountTilt.enableCorrection ? "Yes" : "No"), "blue");
+    
+    // Update UI
+    if (m_enableTiltCorrectionCheck) {
+        m_enableTiltCorrectionCheck->setChecked(m_mountTilt.enableCorrection);
+        m_northTiltSpin->setValue(m_mountTilt.northTilt);
+        m_eastTiltSpin->setValue(m_mountTilt.eastTilt);
+        updateTiltUI();
+    }
+    
+    // Save to settings
+    saveMountTiltToSettings();
+    
+    logMessage("Mount tilt calibration complete. Correction will be applied to all subsequent processing.", "green");
+}
+
+void StellinaProcessor::testMountTiltCorrection() {
+    logMessage("=== TESTING MOUNT TILT CORRECTION ===", "blue");
+    
+    // Test data from your log (known problematic cases)
+    struct TestCase {
+        QString name;
+        double inputAlt, inputAz;
+        QString time;
+        double expectedRA, expectedDec;  // From solve-field
+    };
+    
+    QList<TestCase> testCases = {
+        {"img-0001", 42.0410, 286.8526, "2024-01-09T22:13:29", 10.6760, 41.2734},
+        {"img-0004", 41.9400, 286.9612, "2024-01-09T22:14:11", 10.4917, 41.2887},
+        {"img-0005", 41.9145, 286.9887, "2024-01-09T22:14:21", 10.4929, 41.2904},
+        {"img-0006", 41.8891, 287.0162, "2024-01-09T22:14:32", 10.4935, 41.2916}
+    };
+    
+    logMessage("Testing with and without tilt correction:", "gray");
+    logMessage("", "gray");
+    
+    // Save current state
+    bool originalState = m_mountTilt.enableCorrection;
+    
+    for (const TestCase &test : testCases) {
+        logMessage(QString("=== %1 ===").arg(test.name), "green");
+        
+        // Test without correction
+        m_mountTilt.enableCorrection = false;
+        double ra_uncorrected, dec_uncorrected;
+        convertAltAzToRaDec(test.inputAlt, test.inputAz, test.time, ra_uncorrected, dec_uncorrected);
+        
+        // Test with correction
+        m_mountTilt.enableCorrection = true;
+        double ra_corrected, dec_corrected;
+        convertAltAzToRaDec(test.inputAlt, test.inputAz, test.time, ra_corrected, dec_corrected);
+        
+        // Calculate errors
+        double error_uncorrected_ra = qAbs(ra_uncorrected - test.expectedRA);
+        double error_uncorrected_dec = qAbs(dec_uncorrected - test.expectedDec);
+        double error_corrected_ra = qAbs(ra_corrected - test.expectedRA);
+        double error_corrected_dec = qAbs(dec_corrected - test.expectedDec);
+        
+        // Handle RA wraparound
+        if (error_uncorrected_ra > 180) error_uncorrected_ra = 360 - error_uncorrected_ra;
+        if (error_corrected_ra > 180) error_corrected_ra = 360 - error_corrected_ra;
+        
+        double total_error_uncorrected = sqrt(error_uncorrected_ra*error_uncorrected_ra + 
+                                            error_uncorrected_dec*error_uncorrected_dec);
+        double total_error_corrected = sqrt(error_corrected_ra*error_corrected_ra + 
+                                          error_corrected_dec*error_corrected_dec);
+        
+        logMessage(QString("Input Alt/Az: %1°, %2°")
+                      .arg(test.inputAlt, 0, 'f', 4).arg(test.inputAz, 0, 'f', 4), "gray");
+        logMessage(QString("Expected RA/Dec: %1°, %2°")
+                      .arg(test.expectedRA, 0, 'f', 4).arg(test.expectedDec, 0, 'f', 4), "orange");
+        
+        logMessage(QString("Without correction: RA=%1°, Dec=%2° (error: %3°)")
+                      .arg(ra_uncorrected, 0, 'f', 4)
+                      .arg(dec_uncorrected, 0, 'f', 4)
+                      .arg(total_error_uncorrected, 0, 'f', 3), "red");
+        
+        logMessage(QString("With correction:    RA=%1°, Dec=%2° (error: %3°)")
+                      .arg(ra_corrected, 0, 'f', 4)
+                      .arg(dec_corrected, 0, 'f', 4)
+                      .arg(total_error_corrected, 0, 'f', 3), 
+                  (total_error_corrected < total_error_uncorrected) ? "green" : "orange");
+        
+        double improvement = total_error_uncorrected - total_error_corrected;
+        logMessage(QString("Improvement: %1° (%2%)")
+                      .arg(improvement, 0, 'f', 3)
+                      .arg(improvement/total_error_uncorrected*100, 0, 'f', 1),
+                  (improvement > 0) ? "green" : "red");
+        logMessage("", "gray");
+    }
+    
+    // Restore original state
+    m_mountTilt.enableCorrection = originalState;
+    
+    logMessage("=== END MOUNT TILT CORRECTION TEST ===", "blue");
+}
+
+bool StellinaProcessor::loadMountTiltFromSettings() {
+    QSettings settings;
+    
+    m_mountTilt.northTilt = settings.value("mountTilt/northTilt", 1.0832).toDouble();
+    m_mountTilt.eastTilt = settings.value("mountTilt/eastTilt", 2.4314).toDouble();
+    m_mountTilt.enableCorrection = settings.value("mountTilt/enableCorrection", false).toBool();
+    
+    if (m_mountTilt.enableCorrection) {
+        logMessage(QString("Loaded mount tilt correction: θ_N=%1°, θ_E=%2°")
+                      .arg(m_mountTilt.northTilt, 0, 'f', 4)
+                      .arg(m_mountTilt.eastTilt, 0, 'f', 4), "blue");
+    }
+    
+    return m_mountTilt.enableCorrection;
+}
+
+void StellinaProcessor::saveMountTiltToSettings() {
+    QSettings settings;
+    
+    settings.setValue("mountTilt/northTilt", m_mountTilt.northTilt);
+    settings.setValue("mountTilt/eastTilt", m_mountTilt.eastTilt);
+    settings.setValue("mountTilt/enableCorrection", m_mountTilt.enableCorrection);
+    
+    if (m_debugMode) {
+        logMessage("Mount tilt parameters saved to settings", "gray");
+    }
+}
+// Replace your existing convertAltAzToRaDec function in StellinaProcessor_Core.cpp with this:
+
+bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec) {
+    // Apply mount tilt correction first
+    double correctedAlt, correctedAz;
+    applyMountTiltCorrection(correctedAlt, correctedAz, alt, az);
+    
+    if (m_debugMode && m_mountTilt.enableCorrection) {
+        logMessage(QString("Applied mount tilt correction: Alt %1°→%2°, Az %3°→%4°")
+                      .arg(alt, 0, 'f', 4).arg(correctedAlt, 0, 'f', 4)
+                      .arg(az, 0, 'f', 4).arg(correctedAz, 0, 'f', 4), "blue");
+    }
+    
+    // Parse observer location from settings (default to London if not set)
+    QStringList locationParts = m_observerLocation.split(',');
+    double observer_lat = 51.5074;  // London latitude (degrees)
+    double observer_lon = -0.1278;  // London longitude (degrees)
+    
+    // Try to parse observer location if it's in "lat,lon" format
+    if (locationParts.size() >= 2) {
+        bool ok1, ok2;
+        double lat = locationParts[0].trimmed().toDouble(&ok1);
+        double lon = locationParts[1].trimmed().toDouble(&ok2);
+        if (ok1 && ok2) {
+            observer_lat = lat;
+            observer_lon = lon;
+        }
+    }
+    
+    if (m_debugMode) {
+        logMessage(QString("Using observer location: lat=%1°, lon=%2°")
+                      .arg(observer_lat, 0, 'f', 4)
+                      .arg(observer_lon, 0, 'f', 4), "gray");
+    }
+    
+    // Parse observation time from FITS DATE-OBS header
+    if (m_debugMode) {
+        logMessage(QString("Raw dateObs parameter: '%1' (length: %2)").arg(dateObs).arg(dateObs.length()), "gray");
+    }
+    
+    QDateTime obsTime;
+    if (!dateObs.isEmpty()) {
+        // Try different date formats that might be in FITS headers
+        QStringList formats = {
+            "yyyy-MM-ddThh:mm:ss.zzz",
+            "yyyy-MM-ddThh:mm:ss.zzzZ",
+            "yyyy-MM-ddThh:mm:ss",
+            "yyyy-MM-ddThh:mm:ssZ",
+            "yyyy-MM-dd hh:mm:ss.zzz",
+            "yyyy-MM-dd hh:mm:ss",
+            "yyyy-MM-dd"
+        };
+        
+        for (const QString &format : formats) {
+            obsTime = QDateTime::fromString(dateObs, format);
+            if (obsTime.isValid()) {
+                // Ensure we're working in UTC
+                obsTime.setTimeSpec(Qt::UTC);
+                break;
+            }
+        }
+    }
+    
+    if (!obsTime.isValid()) {
+        logMessage(QString("ERROR: Could not parse observation time '%1' - coordinate conversion requires accurate time").arg(dateObs), "red");
+        logMessage("Supported time formats: yyyy-MM-ddThh:mm:ss.zzz, yyyy-MM-ddThh:mm:ss, yyyy-MM-dd hh:mm:ss", "red");
+        return false;
+    }
+    
+    if (m_debugMode) {
+        logMessage(QString("Observation time: %1").arg(obsTime.toString(Qt::ISODate)), "gray");
+    }
+    
+    // Calculate Julian Date using proven method
+    double jd = calculateJD(obsTime.date().year(),
+                           obsTime.date().month(),
+                           obsTime.date().day(),
+                           obsTime.time().hour(),
+                           obsTime.time().minute(),
+                           obsTime.time().second());
+    
+    if (m_debugMode) {
+        logMessage(QString("Julian Day: %1").arg(jd, 0, 'f', 6), "gray");
+    }
+    
+    // Calculate Local Sidereal Time using high precision method
+    double lst = calculateLST_HighPrecision(jd, observer_lon);
+    if (m_debugMode) {
+        logMessage(QString("Local Sidereal Time: %1 hours (%2°)")
+                      .arg(lst, 0, 'f', 4)
+                      .arg(lst * 15.0, 0, 'f', 2), "gray");
+    }
+    
+    // Convert corrected Alt/Az to RA/Dec using proven method
+    altAzToRaDec(correctedAlt, correctedAz, observer_lat, lst, ra, dec);
+    
+    if (m_debugMode) {
+        logMessage(QString("Final coordinate conversion result:"), "blue");
+        logMessage(QString("  Input Alt/Az: %1°, %2°")
+                      .arg(alt, 0, 'f', 4).arg(az, 0, 'f', 4), "gray");
+        if (m_mountTilt.enableCorrection) {
+            logMessage(QString("  Tilt-corrected Alt/Az: %1°, %2°")
+                          .arg(correctedAlt, 0, 'f', 4).arg(correctedAz, 0, 'f', 4), "blue");
+        }
+        logMessage(QString("  Result RA/Dec: %1°, %2°")
+                      .arg(ra, 0, 'f', 6).arg(dec, 0, 'f', 6), "green");
+        
+        // Also show in hours:minutes:seconds format for RA
+        double ra_hours = ra / 15.0;  // Convert degrees to hours
+        int h = static_cast<int>(ra_hours);
+        int m = static_cast<int>((ra_hours - h) * 60);
+        double s = ((ra_hours - h) * 60 - m) * 60;
+        logMessage(QString("  RA in HMS: %1h %2m %3s").arg(h).arg(m).arg(s, 0, 'f', 2), "blue");
+        
+        // Show declination in degrees:arcminutes:arcseconds
+        int d = static_cast<int>(dec);
+        int am = static_cast<int>(qAbs(dec - d) * 60);
+        double as = (qAbs(dec - d) * 60 - am) * 60;
+        logMessage(QString("  Dec in DMS: %1° %2' %3\"").arg(d).arg(am).arg(as, 0, 'f', 1), "blue");
+    }
+    
+    // Sanity check the results
+    if (ra < 0 || ra >= 360.0) {
+        logMessage(QString("Warning: RA out of range: %1°").arg(ra), "orange");
+    }
+    
+    if (dec < -90.0 || dec > 90.0) {
+        logMessage(QString("Warning: Dec out of range: %1°").arg(dec), "orange");
+    }
+    
+    return true;
 }
