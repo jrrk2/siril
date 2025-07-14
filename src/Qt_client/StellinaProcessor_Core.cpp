@@ -3687,135 +3687,6 @@ void StellinaProcessor::testMountTiltCorrection() {
     logMessage("=== END MOUNT TILT CORRECTION TEST ===", "blue");
 }
 
-bool StellinaProcessor::loadMountTiltFromSettings() {
-    QSettings settings;
-    
-    m_mountTilt.northTilt = settings.value("mountTilt/northTilt", 0.0).toDouble();
-    m_mountTilt.eastTilt = settings.value("mountTilt/eastTilt", 0.0).toDouble();
-    m_mountTilt.driftRA = settings.value("mountTilt/driftRA", 0.0).toDouble();
-    m_mountTilt.driftDec = settings.value("mountTilt/driftDec", 0.0).toDouble();
-    m_mountTilt.systematicRAOffset = settings.value("mountTilt/systematicRAOffset", 0.0).toDouble();
-    m_mountTilt.systematicDecOffset = settings.value("mountTilt/systematicDecOffset", 0.0).toDouble();
-    m_mountTilt.enableCorrection = settings.value("mountTilt/enableCorrection", false).toBool();
-    m_mountTilt.enableDriftCorrection = settings.value("mountTilt/enableDriftCorrection", false).toBool();
-    
-    if (m_mountTilt.enableCorrection) {
-        logMessage(QString("Loaded mount correction: offset RA=%1°, Dec=%2°")
-                      .arg(m_mountTilt.systematicRAOffset, 0, 'f', 4)
-                      .arg(m_mountTilt.systematicDecOffset, 0, 'f', 4), "blue");
-    }
-    
-    return m_mountTilt.enableCorrection;
-}
-
-void StellinaProcessor::saveMountTiltToSettings() {
-    QSettings settings;
-    
-    settings.setValue("mountTilt/northTilt", m_mountTilt.northTilt);
-    settings.setValue("mountTilt/eastTilt", m_mountTilt.eastTilt);
-    settings.setValue("mountTilt/driftRA", m_mountTilt.driftRA);
-    settings.setValue("mountTilt/driftDec", m_mountTilt.driftDec);
-    settings.setValue("mountTilt/systematicRAOffset", m_mountTilt.systematicRAOffset);
-    settings.setValue("mountTilt/systematicDecOffset", m_mountTilt.systematicDecOffset);
-    settings.setValue("mountTilt/enableCorrection", m_mountTilt.enableCorrection);
-    settings.setValue("mountTilt/enableDriftCorrection", m_mountTilt.enableDriftCorrection);
-    
-    if (m_debugMode) {
-        logMessage("Mount correction parameters saved to settings", "gray");
-    }
-}
-
-// 2. Update the coordinate conversion function to apply systematic offsets:
-
-bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec) {
-    // Apply mount tilt correction first (currently just passes through)
-    double correctedAlt, correctedAz;
-    applyMountTiltCorrection(correctedAlt, correctedAz, alt, az);
-    
-    // Parse observer location from settings
-    QStringList locationParts = m_observerLocation.split(',');
-    double observer_lat = 51.5074;
-    double observer_lon = -0.1278;
-    
-    if (locationParts.size() >= 2) {
-        bool ok1, ok2;
-        double lat = locationParts[0].trimmed().toDouble(&ok1);
-        double lon = locationParts[1].trimmed().toDouble(&ok2);
-        if (ok1 && ok2) {
-            observer_lat = lat;
-            observer_lon = lon;
-        }
-    }
-    
-    // Parse observation time
-    QDateTime obsTime;
-    if (!dateObs.isEmpty()) {
-        QStringList formats = {
-            "yyyy-MM-ddThh:mm:ss.zzz",
-            "yyyy-MM-ddThh:mm:ss.zzzZ", 
-            "yyyy-MM-ddThh:mm:ss",
-            "yyyy-MM-ddThh:mm:ssZ",
-            "yyyy-MM-dd hh:mm:ss.zzz",
-            "yyyy-MM-dd hh:mm:ss",
-            "yyyy-MM-dd"
-        };
-        
-        for (const QString &format : formats) {
-            obsTime = QDateTime::fromString(dateObs, format);
-            if (obsTime.isValid()) {
-                obsTime.setTimeSpec(Qt::UTC);
-                break;
-            }
-        }
-    }
-    
-    if (!obsTime.isValid()) {
-        logMessage(QString("ERROR: Could not parse observation time '%1'").arg(dateObs), "red");
-        return false;
-    }
-    
-    // Calculate Julian Date and LST
-    double jd = calculateJD(obsTime.date().year(),
-                           obsTime.date().month(),
-                           obsTime.date().day(),
-                           obsTime.time().hour(),
-                           obsTime.time().minute(),
-                           obsTime.time().second());
-    
-    double lst = calculateLST_HighPrecision(jd, observer_lon);
-    
-    // Convert Alt/Az to RA/Dec using standard algorithm
-    altAzToRaDec(correctedAlt, correctedAz, observer_lat, lst, ra, dec);
-    
-    // Apply systematic offset correction if enabled
-    if (m_mountTilt.enableCorrection) {
-        double originalRA = ra, originalDec = dec;
-        
-        ra += m_mountTilt.systematicRAOffset;
-        dec += m_mountTilt.systematicDecOffset;
-        
-        // Normalize RA to [0, 360) range
-        while (ra < 0) ra += 360.0;
-        while (ra >= 360.0) ra -= 360.0;
-        
-        // Clamp Dec to valid range
-        if (dec > 90.0) dec = 90.0;
-        if (dec < -90.0) dec = -90.0;
-        
-        if (m_debugMode) {
-            logMessage(QString("Systematic offset correction: RA %1°→%2° (+%3°), Dec %4°→%5° (+%6°)")
-                          .arg(originalRA, 0, 'f', 3).arg(ra, 0, 'f', 3).arg(m_mountTilt.systematicRAOffset, 0, 'f', 3)
-                          .arg(originalDec, 0, 'f', 3).arg(dec, 0, 'f', 3).arg(m_mountTilt.systematicDecOffset, 0, 'f', 3), "blue");
-        }
-    }
-    
-    if (m_debugMode) {
-        logMessage(QString("Final coordinates: RA=%1°, Dec=%2°")
-                      .arg(ra, 0, 'f', 6).arg(dec, 0, 'f', 6), "green");
-    }
-    
-    return true;
-}
 // Dynamic calibration that reads data directly from processed FITS files
 
 void StellinaProcessor::calibrateFromProcessedFiles() {
@@ -4022,17 +3893,18 @@ bool StellinaProcessor::readSolveFieldResults(const QString &fitsPath, Processed
     fits_close_file(fptr, &status);
     return false;
 }
+// Update the analyzeAndCalibrateFromData function to use linear regression
+// Replace the existing function in StellinaProcessor_Core.cpp
 
 void StellinaProcessor::analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, 
                                                    const QDateTime &sessionStart) {
     logMessage("", "gray");
-    logMessage("ANALYZING MOUNT ERRORS:", "blue");
+    logMessage("ANALYZING MOUNT ERRORS WITH LINEAR REGRESSION:", "blue");
     
     // Calculate errors for each image
     QList<double> timePoints, raErrors, decErrors, totalErrors;
     double maxError = 0.0;
     double totalErrorSum = 0.0;
-    double raErrorSum = 0.0, decErrorSum = 0.0;
     
     for (const ProcessedImageData &data : imageData) {
         double raError = data.predictedRA - data.solvedRA;
@@ -4051,8 +3923,6 @@ void StellinaProcessor::analyzeAndCalibrateFromData(const QList<ProcessedImageDa
         
         maxError = qMax(maxError, totalError);
         totalErrorSum += totalError;
-        raErrorSum += raError;
-        decErrorSum += decError;
         
         QString errorLevel = (totalError < 1.0) ? "green" : 
                            (totalError < 2.0) ? "orange" : "red";
@@ -4065,59 +3935,699 @@ void StellinaProcessor::analyzeAndCalibrateFromData(const QList<ProcessedImageDa
                       .arg(totalError, 0, 'f', 3), errorLevel);
     }
     
-    double avgError = totalErrorSum / imageData.size();
-    double avgRAError = raErrorSum / imageData.size();
-    double avgDecError = decErrorSum / imageData.size();
+    int n = imageData.size();
+    double avgError = totalErrorSum / n;
     
     logMessage("", "gray");
     logMessage("ERROR STATISTICS:", "blue");
-    logMessage(QString("Average RA error: %1°").arg(avgRAError, 0, 'f', 3), "orange");
-    logMessage(QString("Average Dec error: %1°").arg(avgDecError, 0, 'f', 3), "orange");
+    logMessage(QString("Number of data points: %1").arg(n), "blue");
+    logMessage(QString("Time span: %.1f minutes").arg(timePoints.last() - timePoints.first()), "blue");
     logMessage(QString("Average total error: %1°").arg(avgError, 0, 'f', 3), "orange");
     logMessage(QString("Maximum error: %1°").arg(maxError, 0, 'f', 3), "orange");
     
-    // Apply systematic offset correction
-    if (qAbs(avgRAError) > 0.1 || qAbs(avgDecError) > 0.1) {
-        logMessage("", "gray");
-        logMessage("APPLYING SYSTEMATIC OFFSET CORRECTION:", "green");
+    // Perform linear regression on RA and Dec errors vs time
+    logMessage("", "gray");
+    logMessage("LINEAR REGRESSION ANALYSIS:", "blue");
+    
+    // Calculate linear regression: error = intercept + slope * time
+    double sumTime = 0.0, sumRA = 0.0, sumDec = 0.0;
+    double sumTimeSquared = 0.0, sumTimeRA = 0.0, sumTimeDec = 0.0;
+    
+    for (int i = 0; i < n; ++i) {
+        double time = timePoints[i];
+        double raErr = raErrors[i];
+        double decErr = decErrors[i];
         
-        m_mountTilt.systematicRAOffset = -avgRAError;
-        m_mountTilt.systematicDecOffset = -avgDecError;
-        m_mountTilt.enableCorrection = true;
-        
-        // Reset geometric tilt parameters since they're not working
-        m_mountTilt.northTilt = 0.0;
-        m_mountTilt.eastTilt = 0.0;
-        
-        logMessage(QString("Systematic RA offset: %1°").arg(m_mountTilt.systematicRAOffset, 0, 'f', 4), "green");
-        logMessage(QString("Systematic Dec offset: %1°").arg(m_mountTilt.systematicDecOffset, 0, 'f', 4), "green");
-        
-        // Estimate improvement
-        double estimatedNewError = sqrt((avgRAError + m_mountTilt.systematicRAOffset)*(avgRAError + m_mountTilt.systematicRAOffset) + 
-                                       (avgDecError + m_mountTilt.systematicDecOffset)*(avgDecError + m_mountTilt.systematicDecOffset));
-        
-        logMessage(QString("Expected error reduction: %1° → %2°")
-                      .arg(avgError, 0, 'f', 3)
-                      .arg(estimatedNewError, 0, 'f', 3), "green");
-    } else {
-        logMessage("", "gray");
-        logMessage("Systematic errors are small - no offset correction needed", "green");
+        sumTime += time;
+        sumRA += raErr;
+        sumDec += decErr;
+        sumTimeSquared += time * time;
+        sumTimeRA += time * raErr;
+        sumTimeDec += time * decErr;
     }
     
-    // Continue with drift analysis...
-    if (imageData.size() >= 10) {
-        // ... existing drift analysis code ...
+    // RA regression: raError = raIntercept + raSlope * time
+    double raSlope = (n * sumTimeRA - sumTime * sumRA) / (n * sumTimeSquared - sumTime * sumTime);
+    double raIntercept = (sumRA - raSlope * sumTime) / n;
+    
+    // Dec regression: decError = decIntercept + decSlope * time  
+    double decSlope = (n * sumTimeDec - sumTime * sumDec) / (n * sumTimeSquared - sumTime * sumTime);
+    double decIntercept = (sumDec - decSlope * sumTime) / n;
+    
+    // Convert slopes from degrees/minute to degrees/hour
+    double raSlope_hourly = raSlope * 60.0;
+    double decSlope_hourly = decSlope * 60.0;
+    
+    logMessage(QString("RA error regression: %1° + %2°/min * t")
+                  .arg(raIntercept, 0, 'f', 3)
+                  .arg(raSlope, 0, 'f', 4), "blue");
+    logMessage(QString("                     %1° + %2°/hour * t")
+                  .arg(raIntercept, 0, 'f', 3)
+                  .arg(raSlope_hourly, 0, 'f', 3), "blue");
+    
+    logMessage(QString("Dec error regression: %1° + %2°/min * t")
+                  .arg(decIntercept, 0, 'f', 3)
+                  .arg(decSlope, 0, 'f', 4), "blue");
+    logMessage(QString("                      %1° + %2°/hour * t")
+                  .arg(decIntercept, 0, 'f', 3)
+                  .arg(decSlope_hourly, 0, 'f', 3), "blue");
+    
+    // Calculate correlation coefficients to assess fit quality
+    double raVariance = 0.0, timeVariance = 0.0, raTimeCovariance = 0.0;
+    double raMean = sumRA / n;
+    double timeMean = sumTime / n;
+    
+    for (int i = 0; i < n; ++i) {
+        double deltaRA = raErrors[i] - raMean;
+        double deltaTime = timePoints[i] - timeMean;
+        raVariance += deltaRA * deltaRA;
+        timeVariance += deltaTime * deltaTime;
+        raTimeCovariance += deltaRA * deltaTime;
+    }
+    
+    double raCorrelation = raTimeCovariance / sqrt(raVariance * timeVariance);
+    double raR_squared = raCorrelation * raCorrelation;
+    
+    logMessage(QString("RA regression R² = %1 (correlation = %2)")
+                  .arg(raR_squared, 0, 'f', 3)
+                  .arg(raCorrelation, 0, 'f', 3), "blue");
+    
+    // Calculate similar for Dec
+    double decVariance = 0.0, decTimeCovariance = 0.0;
+    double decMean = sumDec / n;
+    
+    for (int i = 0; i < n; ++i) {
+        double deltaDec = decErrors[i] - decMean;
+        double deltaTime = timePoints[i] - timeMean;
+        decVariance += deltaDec * deltaDec;
+        decTimeCovariance += deltaDec * deltaTime;
+    }
+    
+    double decCorrelation = decTimeCovariance / sqrt(decVariance * timeVariance);
+    double decR_squared = decCorrelation * decCorrelation;
+    
+    logMessage(QString("Dec regression R² = %1 (correlation = %2)")
+                  .arg(decR_squared, 0, 'f', 3)
+                  .arg(decCorrelation, 0, 'f', 3), "blue");
+    
+    // Store the linear drift parameters
+    logMessage("", "gray");
+    logMessage("APPLYING TIME-DEPENDENT DRIFT CORRECTION:", "green");
+    
+    m_mountTilt.initialRAOffset = raIntercept;     // RA error at t=0
+    m_mountTilt.initialDecOffset = decIntercept;   // Dec error at t=0
+    m_mountTilt.driftRA = raSlope_hourly;          // RA drift rate (degrees/hour)
+    m_mountTilt.driftDec = decSlope_hourly;        // Dec drift rate (degrees/hour)
+    m_mountTilt.sessionStart = sessionStart;      // Session start time for t=0 reference
+    m_mountTilt.enableCorrection = true;
+    m_mountTilt.enableDriftCorrection = true;
+    
+    // Clear geometric tilt parameters (not using them)
+    m_mountTilt.northTilt = 0.0;
+    m_mountTilt.eastTilt = 0.0;
+    m_mountTilt.systematicRAOffset = 0.0;   // Not using constant offset
+    m_mountTilt.systematicDecOffset = 0.0;
+    
+    logMessage(QString("Initial RA offset (t=0): %1°").arg(m_mountTilt.initialRAOffset, 0, 'f', 4), "green");
+    logMessage(QString("Initial Dec offset (t=0): %1°").arg(m_mountTilt.initialDecOffset, 0, 'f', 4), "green");
+    logMessage(QString("RA drift rate: %1°/hour").arg(m_mountTilt.driftRA, 0, 'f', 3), "green");
+    logMessage(QString("Dec drift rate: %1°/hour").arg(m_mountTilt.driftDec, 0, 'f', 3), "green");
+    
+    // Estimate improvement using linear model
+    double totalPredictedError = 0.0;
+    for (int i = 0; i < n; ++i) {
+        double time_hours = timePoints[i] / 60.0;
+        double predictedRAError = raIntercept + raSlope_hourly * time_hours;
+        double predictedDecError = decIntercept + decSlope_hourly * time_hours;
+        double correctedRAError = raErrors[i] - predictedRAError;
+        double correctedDecError = decErrors[i] - predictedDecError;
+        double correctedTotalError = sqrt(correctedRAError*correctedRAError + 
+                                         correctedDecError*correctedDecError);
+        totalPredictedError += correctedTotalError;
+    }
+    
+    double avgPredictedError = totalPredictedError / n;
+    double improvement = avgError - avgPredictedError;
+    
+    logMessage("", "gray");
+    logMessage("EXPECTED IMPROVEMENT:", "green");
+    logMessage(QString("Current average error: %1°").arg(avgError, 0, 'f', 3), "orange");
+    logMessage(QString("Predicted residual error: %1°").arg(avgPredictedError, 0, 'f', 3), "green");
+    logMessage(QString("Expected improvement: %1° (%2%)")
+                  .arg(improvement, 0, 'f', 3)
+                  .arg(improvement/avgError*100, 0, 'f', 1), "green");
+    
+    if (raR_squared > 0.8) {
+        logMessage("✓ EXCELLENT: Strong linear correlation in RA drift", "green");
+    } else if (raR_squared > 0.5) {
+        logMessage("✓ GOOD: Moderate linear correlation in RA drift", "green");
+    } else {
+        logMessage("⚠ WARNING: Weak linear correlation - drift may be more complex", "orange");
+    }
+    
+    if (avgPredictedError < 1.0) {
+        logMessage("✓ Expected residual error < 1.0° - excellent correction!", "green");
+    } else if (avgPredictedError < 2.0) {
+        logMessage("✓ Expected residual error < 2.0° - good correction", "green");
+    } else {
+        logMessage("⚠ Expected residual error still high - may need additional correction", "orange");
     }
     
     // Update UI and save
-    if (m_enableTiltCorrectionCheck) {
-        m_enableTiltCorrectionCheck->setChecked(m_mountTilt.enableCorrection);
-        m_northTiltSpin->setValue(m_mountTilt.northTilt);
-        m_eastTiltSpin->setValue(m_mountTilt.eastTilt);
+    if (m_enableTiltCorrectionCheck && m_enableDriftCorrectionCheck) {
+        m_enableTiltCorrectionCheck->setChecked(true);
+        m_enableDriftCorrectionCheck->setChecked(true);
+        m_northTiltSpin->setValue(0.0);
+        m_eastTiltSpin->setValue(0.0);
         updateTiltUI();
     }
     
     saveMountTiltToSettings();
     
-    logMessage("=== DYNAMIC CALIBRATION COMPLETE ===", "blue");
+    logMessage("=== LINEAR REGRESSION CALIBRATION COMPLETE ===", "blue");
+}
+
+// Update the coordinate conversion to apply time-dependent correction:
+bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec) {
+    // Apply mount tilt correction first (currently just passes through)
+    double correctedAlt, correctedAz;
+    applyMountTiltCorrection(correctedAlt, correctedAz, alt, az);
+    
+    // Parse observer location from settings
+    QStringList locationParts = m_observerLocation.split(',');
+    double observer_lat = 51.5074;
+    double observer_lon = -0.1278;
+    
+    if (locationParts.size() >= 2) {
+        bool ok1, ok2;
+        double lat = locationParts[0].trimmed().toDouble(&ok1);
+        double lon = locationParts[1].trimmed().toDouble(&ok2);
+        if (ok1 && ok2) {
+            observer_lat = lat;
+            observer_lon = lon;
+        }
+    }
+    
+    // Parse observation time
+    QDateTime obsTime;
+    if (!dateObs.isEmpty()) {
+        QStringList formats = {
+            "yyyy-MM-ddThh:mm:ss.zzz",
+            "yyyy-MM-ddThh:mm:ss.zzzZ", 
+            "yyyy-MM-ddThh:mm:ss",
+            "yyyy-MM-ddThh:mm:ssZ",
+            "yyyy-MM-dd hh:mm:ss.zzz",
+            "yyyy-MM-dd hh:mm:ss",
+            "yyyy-MM-dd"
+        };
+        
+        for (const QString &format : formats) {
+            obsTime = QDateTime::fromString(dateObs, format);
+            if (obsTime.isValid()) {
+                obsTime.setTimeSpec(Qt::UTC);
+                break;
+            }
+        }
+    }
+    
+    if (!obsTime.isValid()) {
+        logMessage(QString("ERROR: Could not parse observation time '%1'").arg(dateObs), "red");
+        return false;
+    }
+    
+    // Calculate Julian Date and LST
+    double jd = calculateJD(obsTime.date().year(),
+                           obsTime.date().month(),
+                           obsTime.date().day(),
+                           obsTime.time().hour(),
+                           obsTime.time().minute(),
+                           obsTime.time().second());
+    
+    double lst = calculateLST_HighPrecision(jd, observer_lon);
+    
+    // Convert Alt/Az to RA/Dec using standard algorithm
+    altAzToRaDec(correctedAlt, correctedAz, observer_lat, lst, ra, dec);
+    
+    // Apply time-dependent drift correction if enabled
+    if (m_mountTilt.enableCorrection && m_mountTilt.enableDriftCorrection && 
+        m_mountTilt.sessionStart.isValid()) {
+        
+        double originalRA = ra, originalDec = dec;
+        
+        // Calculate time elapsed since session start (in hours)
+        double elapsedHours = m_mountTilt.sessionStart.msecsTo(obsTime) / 3600000.0;
+        
+        // Apply linear drift correction: correction = initial_offset + drift_rate * elapsed_time
+        double raCorrection = -(m_mountTilt.initialRAOffset + m_mountTilt.driftRA * elapsedHours);
+        double decCorrection = -(m_mountTilt.initialDecOffset + m_mountTilt.driftDec * elapsedHours);
+        
+        ra += raCorrection;
+        dec += decCorrection;
+        
+        // Normalize RA to [0, 360) range
+        while (ra < 0) ra += 360.0;
+        while (ra >= 360.0) ra -= 360.0;
+        
+        // Clamp Dec to valid range
+        if (dec > 90.0) dec = 90.0;
+        if (dec < -90.0) dec = -90.0;
+        
+        if (m_debugMode) {
+            logMessage(QString("Time-dependent drift correction:")
+                          .arg(elapsedHours, 0, 'f', 3), "blue");
+            logMessage(QString("  Elapsed time: %1 hours").arg(elapsedHours, 0, 'f', 3), "gray");
+            logMessage(QString("  RA correction: %1°").arg(raCorrection, 0, 'f', 3), "gray");
+            logMessage(QString("  Dec correction: %1°").arg(decCorrection, 0, 'f', 3), "gray");
+            logMessage(QString("  Result: RA %1°→%2°, Dec %3°→%4°")
+                          .arg(originalRA, 0, 'f', 3).arg(ra, 0, 'f', 3)
+                          .arg(originalDec, 0, 'f', 3).arg(dec, 0, 'f', 3), "blue");
+        }
+    }
+    
+    if (m_debugMode) {
+        logMessage(QString("Final coordinates: RA=%1°, Dec=%2°")
+                      .arg(ra, 0, 'f', 6).arg(dec, 0, 'f', 6), "green");
+    }
+    
+    return true;
+}
+
+// Update the save/load settings functions:
+void StellinaProcessor::saveMountTiltToSettings() {
+    QSettings settings;
+    
+    settings.setValue("mountTilt/northTilt", m_mountTilt.northTilt);
+    settings.setValue("mountTilt/eastTilt", m_mountTilt.eastTilt);
+    settings.setValue("mountTilt/driftRA", m_mountTilt.driftRA);
+    settings.setValue("mountTilt/driftDec", m_mountTilt.driftDec);
+    settings.setValue("mountTilt/systematicRAOffset", m_mountTilt.systematicRAOffset);
+    settings.setValue("mountTilt/systematicDecOffset", m_mountTilt.systematicDecOffset);
+    settings.setValue("mountTilt/initialRAOffset", m_mountTilt.initialRAOffset);
+    settings.setValue("mountTilt/initialDecOffset", m_mountTilt.initialDecOffset);
+    settings.setValue("mountTilt/enableCorrection", m_mountTilt.enableCorrection);
+    settings.setValue("mountTilt/enableDriftCorrection", m_mountTilt.enableDriftCorrection);
+    settings.setValue("mountTilt/sessionStart", m_mountTilt.sessionStart);
+    
+    if (m_debugMode) {
+        logMessage("Mount drift correction parameters saved to settings", "gray");
+    }
+}
+
+bool StellinaProcessor::loadMountTiltFromSettings() {
+    QSettings settings;
+    
+    m_mountTilt.northTilt = settings.value("mountTilt/northTilt", 0.0).toDouble();
+    m_mountTilt.eastTilt = settings.value("mountTilt/eastTilt", 0.0).toDouble();
+    m_mountTilt.driftRA = settings.value("mountTilt/driftRA", 0.0).toDouble();
+    m_mountTilt.driftDec = settings.value("mountTilt/driftDec", 0.0).toDouble();
+    m_mountTilt.systematicRAOffset = settings.value("mountTilt/systematicRAOffset", 0.0).toDouble();
+    m_mountTilt.systematicDecOffset = settings.value("mountTilt/systematicDecOffset", 0.0).toDouble();
+    m_mountTilt.initialRAOffset = settings.value("mountTilt/initialRAOffset", 0.0).toDouble();
+    m_mountTilt.initialDecOffset = settings.value("mountTilt/initialDecOffset", 0.0).toDouble();
+    m_mountTilt.enableCorrection = settings.value("mountTilt/enableCorrection", false).toBool();
+    m_mountTilt.enableDriftCorrection = settings.value("mountTilt/enableDriftCorrection", false).toBool();
+    m_mountTilt.sessionStart = settings.value("mountTilt/sessionStart").toDateTime();
+    
+    if (m_mountTilt.enableCorrection && m_mountTilt.enableDriftCorrection) {
+        logMessage(QString("Loaded mount drift correction: initial RA=%1°, drift=%2°/h")
+                      .arg(m_mountTilt.initialRAOffset, 0, 'f', 4)
+                      .arg(m_mountTilt.driftRA, 0, 'f', 3), "blue");
+    }
+    
+    return m_mountTilt.enableCorrection;
+}
+
+// Replace the testSystematicOffsetCorrection function with this real data version
+// Add to StellinaProcessor_Core.cpp
+
+void StellinaProcessor::testSystematicOffsetCorrection() {
+    logMessage("=== TESTING DRIFT CORRECTION WITH REAL FITS DATA ===", "blue");
+    
+    // Check if we have plate-solved files to work with
+    QDir plateSolvedDir(m_plateSolvedDirectory);
+    if (m_plateSolvedDirectory.isEmpty() || !plateSolvedDir.exists()) {
+        logMessage("No plate-solved directory found. Run plate solving first.", "red");
+        return;
+    }
+    
+    // Get list of plate-solved FITS files
+    QStringList plateSolvedFiles = plateSolvedDir.entryList(
+        QStringList() << "plate_solved_*.fits" << "*solved*.fits", 
+        QDir::Files);
+    
+    if (plateSolvedFiles.isEmpty()) {
+        logMessage("No plate-solved FITS files found for testing", "red");
+        return;
+    }
+    
+    // Sort files and take a sample for testing (every 10th file to cover time span)
+    plateSolvedFiles.sort();
+    QStringList testFiles;
+    for (int i = 0; i < plateSolvedFiles.size(); i += qMax(1, plateSolvedFiles.size() / 20)) {
+        testFiles.append(plateSolvedFiles[i]);
+        if (testFiles.size() >= 20) break;  // Limit to 20 test points
+    }
+    
+    logMessage(QString("Testing with %1 files spanning the observation session").arg(testFiles.size()), "blue");
+    logMessage("", "gray");
+    
+    // Display current correction parameters
+    logMessage("Current drift correction parameters:", "blue");
+    logMessage(QString("  Correction enabled: %1").arg(m_mountTilt.enableCorrection ? "Yes" : "No"), "blue");
+    logMessage(QString("  Drift correction enabled: %1").arg(m_mountTilt.enableDriftCorrection ? "Yes" : "No"), "blue");
+    
+    if (m_mountTilt.enableCorrection && m_mountTilt.enableDriftCorrection) {
+        logMessage(QString("  Initial RA offset: %1°").arg(m_mountTilt.initialRAOffset, 0, 'f', 4), "blue");
+        logMessage(QString("  Initial Dec offset: %1°").arg(m_mountTilt.initialDecOffset, 0, 'f', 4), "blue");
+        logMessage(QString("  RA drift rate: %1°/hour").arg(m_mountTilt.driftRA, 0, 'f', 3), "blue");
+        logMessage(QString("  Dec drift rate: %1°/hour").arg(m_mountTilt.driftDec, 0, 'f', 3), "blue");
+        logMessage(QString("  Session start: %1").arg(m_mountTilt.sessionStart.toString(Qt::ISODate)), "blue");
+    } else {
+        logMessage("  Drift correction is disabled - enable it first", "red");
+        return;
+    }
+    logMessage("", "gray");
+    
+    // Test each file
+    QList<double> errorsBeforeCorrection, errorsAfterCorrection;
+    QList<double> timePoints;
+    QDateTime sessionStart;
+    bool sessionStartSet = false;
+    
+    for (const QString &fileName : testFiles) {
+        QString fitsPath = plateSolvedDir.absoluteFilePath(fileName);
+        
+        // Read coordinates from FITS headers
+        fitsfile *fptr = nullptr;
+        int status = 0;
+        
+        QByteArray pathBytes = fitsPath.toLocal8Bit();
+        if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
+            logMessage(QString("Failed to open FITS file: %1").arg(fileName), "orange");
+            continue;
+        }
+        
+        // Read Stellina Alt/Az coordinates
+        double stellinaAlt, stellinaAz;
+        if (fits_read_key(fptr, TDOUBLE, "STELLALT", &stellinaAlt, nullptr, &status) != 0 ||
+            fits_read_key(fptr, TDOUBLE, "STELLAZ", &stellinaAz, nullptr, &status) != 0) {
+            logMessage(QString("No Stellina Alt/Az in %1").arg(fileName), "orange");
+            fits_close_file(fptr, &status);
+            continue;
+        }
+        
+        // Read observation time
+        char dateobs[FLEN_VALUE];
+        status = 0;
+        if (fits_read_key(fptr, TSTRING, "DATE-OBS", dateobs, nullptr, &status) != 0) {
+            logMessage(QString("No DATE-OBS in %1").arg(fileName), "orange");
+            fits_close_file(fptr, &status);
+            continue;
+        }
+        
+        QString dateObsStr = QString::fromLatin1(dateobs).trimmed().remove('\'').remove('"');
+        
+        // Read solved RA/Dec (from WCS headers - this is the "ground truth")
+        double solvedRA, solvedDec;
+        status = 0;
+        if (fits_read_key(fptr, TDOUBLE, "CRVAL1", &solvedRA, nullptr, &status) != 0 ||
+            fits_read_key(fptr, TDOUBLE, "CRVAL2", &solvedDec, nullptr, &status) != 0) {
+            logMessage(QString("No WCS RA/Dec in %1").arg(fileName), "orange");
+            fits_close_file(fptr, &status);
+            continue;
+        }
+        
+        fits_close_file(fptr, &status);
+        
+        // Parse observation time for elapsed time calculation
+        QDateTime obsTime = QDateTime::fromString(dateObsStr, "yyyy-MM-ddThh:mm:ss");
+        if (!obsTime.isValid()) {
+            // Try other formats
+            QStringList timeFormats = {
+                "yyyy-MM-ddThh:mm:ss.zzz",
+                "yyyy-MM-dd hh:mm:ss"
+            };
+            for (const QString &format : timeFormats) {
+                obsTime = QDateTime::fromString(dateObsStr, format);
+                if (obsTime.isValid()) break;
+            }
+        }
+        
+        if (!obsTime.isValid()) {
+            logMessage(QString("Invalid time format in %1: %2").arg(fileName).arg(dateObsStr), "orange");
+            continue;
+        }
+        
+        obsTime.setTimeSpec(Qt::UTC);
+        
+        // Set session start from first valid file
+        if (!sessionStartSet) {
+            sessionStart = obsTime;
+            sessionStartSet = true;
+        }
+        
+        double minutesFromStart = sessionStart.msecsTo(obsTime) / 60000.0;
+        timePoints.append(minutesFromStart);
+        
+        // Test WITHOUT correction (temporarily disable)
+        bool originalEnabled = m_mountTilt.enableCorrection;
+        bool originalDriftEnabled = m_mountTilt.enableDriftCorrection;
+        m_mountTilt.enableCorrection = false;
+        m_mountTilt.enableDriftCorrection = false;
+        
+        double ra_uncorrected, dec_uncorrected;
+        if (!convertAltAzToRaDec(stellinaAlt, stellinaAz, dateObsStr, ra_uncorrected, dec_uncorrected)) {
+            logMessage(QString("Failed to convert coordinates for %1").arg(fileName), "orange");
+            continue;
+        }
+        
+        // Test WITH correction (re-enable)
+        m_mountTilt.enableCorrection = originalEnabled;
+        m_mountTilt.enableDriftCorrection = originalDriftEnabled;
+        
+        double ra_corrected, dec_corrected;
+        if (!convertAltAzToRaDec(stellinaAlt, stellinaAz, dateObsStr, ra_corrected, dec_corrected)) {
+            logMessage(QString("Failed to convert corrected coordinates for %1").arg(fileName), "orange");
+            continue;
+        }
+        
+        // Calculate errors against solve-field solution (ground truth)
+        double error_uncorrected_ra = ra_uncorrected - solvedRA;
+        double error_uncorrected_dec = dec_uncorrected - solvedDec;
+        double error_corrected_ra = ra_corrected - solvedRA;
+        double error_corrected_dec = dec_corrected - solvedDec;
+        
+        // Handle RA wraparound
+        if (error_uncorrected_ra > 180) error_uncorrected_ra -= 360;
+        if (error_uncorrected_ra < -180) error_uncorrected_ra += 360;
+        if (error_corrected_ra > 180) error_corrected_ra -= 360;
+        if (error_corrected_ra < -180) error_corrected_ra += 360;
+        
+        double total_error_uncorrected = sqrt(error_uncorrected_ra*error_uncorrected_ra + 
+                                            error_uncorrected_dec*error_uncorrected_dec);
+        double total_error_corrected = sqrt(error_corrected_ra*error_corrected_ra + 
+                                          error_corrected_dec*error_corrected_dec);
+        
+        errorsBeforeCorrection.append(total_error_uncorrected);
+        errorsAfterCorrection.append(total_error_corrected);
+        
+        // Extract image number for display
+        QString baseName = QFileInfo(fileName).baseName();
+        QRegularExpression imgNumRegex(R"(img-(\d+))");
+        QRegularExpressionMatch match = imgNumRegex.match(baseName);
+        QString imgNum = match.hasMatch() ? match.captured(1) : "???";
+        
+        // Log results
+        logMessage(QString("Img-%1 (t=%2min):")
+                      .arg(imgNum, 3)
+                      .arg(minutesFromStart, 0, 'f', 1), "green");
+        logMessage(QString("  Alt/Az: %1°, %2°")
+                      .arg(stellinaAlt, 0, 'f', 4).arg(stellinaAz, 0, 'f', 4), "gray");
+        logMessage(QString("  Solved: RA=%1°, Dec=%2° (ground truth)")
+                      .arg(solvedRA, 0, 'f', 4).arg(solvedDec, 0, 'f', 4), "orange");
+        logMessage(QString("  Before correction: RA=%1°, Dec=%2° (error: %3°)")
+                      .arg(ra_uncorrected, 0, 'f', 4)
+                      .arg(dec_uncorrected, 0, 'f', 4)
+                      .arg(total_error_uncorrected, 0, 'f', 3), "red");
+        logMessage(QString("  After correction:  RA=%1°, Dec=%2° (error: %3°)")
+                      .arg(ra_corrected, 0, 'f', 4)
+                      .arg(dec_corrected, 0, 'f', 4)
+                      .arg(total_error_corrected, 0, 'f', 3), 
+                  (total_error_corrected < total_error_uncorrected) ? "green" : "orange");
+        
+        double improvement = total_error_uncorrected - total_error_corrected;
+        logMessage(QString("  Improvement: %1° (%2%)")
+                      .arg(improvement, 0, 'f', 3)
+                      .arg(improvement/total_error_uncorrected*100, 0, 'f', 1),
+                  (improvement > 0) ? "green" : "red");
+        logMessage("", "gray");
+    }
+    
+    if (errorsBeforeCorrection.isEmpty()) {
+        logMessage("No valid test data found", "red");
+        return;
+    }
+    
+    // Calculate overall statistics
+    double avgErrorBefore = 0.0, avgErrorAfter = 0.0;
+    double maxErrorBefore = 0.0, maxErrorAfter = 0.0;
+    double minErrorBefore = 1000.0, minErrorAfter = 1000.0;
+    
+    for (int i = 0; i < errorsBeforeCorrection.size(); ++i) {
+        avgErrorBefore += errorsBeforeCorrection[i];
+        avgErrorAfter += errorsAfterCorrection[i];
+        maxErrorBefore = qMax(maxErrorBefore, errorsBeforeCorrection[i]);
+        maxErrorAfter = qMax(maxErrorAfter, errorsAfterCorrection[i]);
+        minErrorBefore = qMin(minErrorBefore, errorsBeforeCorrection[i]);
+        minErrorAfter = qMin(minErrorAfter, errorsAfterCorrection[i]);
+    }
+    
+    avgErrorBefore /= errorsBeforeCorrection.size();
+    avgErrorAfter /= errorsAfterCorrection.size();
+    
+    double overallImprovement = avgErrorBefore - avgErrorAfter;
+    double improvementPercent = (overallImprovement / avgErrorBefore) * 100.0;
+    
+    // Calculate RMS error
+    double rmsBefore = 0.0, rmsAfter = 0.0;
+    for (int i = 0; i < errorsBeforeCorrection.size(); ++i) {
+        rmsBefore += errorsBeforeCorrection[i] * errorsBeforeCorrection[i];
+        rmsAfter += errorsAfterCorrection[i] * errorsAfterCorrection[i];
+    }
+    rmsBefore = sqrt(rmsBefore / errorsBeforeCorrection.size());
+    rmsAfter = sqrt(rmsAfter / errorsAfterCorrection.size());
+    
+    logMessage("=== OVERALL TEST RESULTS ===", "blue");
+    logMessage(QString("Test data points: %1").arg(errorsBeforeCorrection.size()), "blue");
+    logMessage(QString("Time span tested: %.1f minutes").arg(timePoints.last() - timePoints.first()), "blue");
+    logMessage("", "gray");
+    
+    logMessage("Error Statistics:", "blue");
+    logMessage(QString("  Before correction: avg=%.3f°, rms=%.3f°, range=%.3f°-%.3f°")
+                  .arg(avgErrorBefore).arg(rmsBefore).arg(minErrorBefore).arg(maxErrorBefore), "orange");
+    logMessage(QString("  After correction:  avg=%.3f°, rms=%.3f°, range=%.3f°-%.3f°")
+                  .arg(avgErrorAfter).arg(rmsAfter).arg(minErrorAfter).arg(maxErrorAfter), "green");
+    logMessage(QString("  Improvement: %.3f° (%.1f%% reduction)")
+                  .arg(overallImprovement).arg(improvementPercent), 
+              (overallImprovement > 0) ? "green" : "red");
+    
+    // Performance assessment
+    logMessage("", "gray");
+    if (avgErrorAfter < 0.5) {
+        logMessage("✓ EXCELLENT: Average error now < 0.5° - drift correction working very well!", "green");
+    } else if (avgErrorAfter < 1.0) {
+        logMessage("✓ GOOD: Average error now < 1.0° - significant improvement", "green");
+    } else if (avgErrorAfter < 2.0) {
+        logMessage("✓ MODERATE: Average error now < 2.0° - some improvement", "orange");
+    } else if (overallImprovement > 0) {
+        logMessage("⚠ PARTIAL: Some improvement but errors still large", "orange");
+    } else {
+        logMessage("✗ PROBLEM: Drift correction not working - check parameters", "red");
+    }
+    
+    // Check for residual drift
+    if (errorsAfterCorrection.size() >= 5) {
+        // Simple check: compare first few and last few errors
+        double avgEarlyError = 0.0, avgLateError = 0.0;
+        int nEarly = qMin(3, errorsAfterCorrection.size() / 3);
+        int nLate = qMin(3, errorsAfterCorrection.size() / 3);
+        
+        for (int i = 0; i < nEarly; ++i) {
+            avgEarlyError += errorsAfterCorrection[i];
+        }
+        avgEarlyError /= nEarly;
+        
+        for (int i = errorsAfterCorrection.size() - nLate; i < errorsAfterCorrection.size(); ++i) {
+            avgLateError += errorsAfterCorrection[i];
+        }
+        avgLateError /= nLate;
+        
+        double residualDrift = avgLateError - avgEarlyError;
+        logMessage(QString("Residual drift check: early=%.3f°, late=%.3f°, drift=%.3f°")
+                      .arg(avgEarlyError).arg(avgLateError).arg(residualDrift), "blue");
+        
+        if (qAbs(residualDrift) < 0.5) {
+            logMessage("✓ Residual drift is small - linear model fits well", "green");
+        } else {
+            logMessage("⚠ Significant residual drift - may need higher-order correction", "orange");
+        }
+    }
+    
+    logMessage("=== END DRIFT CORRECTION TEST ===", "blue");
+}
+
+// Also add a function to verify the systematic offsets are being applied correctly
+void StellinaProcessor::verifySystematicOffsetsInUse() {
+    logMessage("=== VERIFYING SYSTEMATIC OFFSET APPLICATION ===", "blue");
+    
+    logMessage("Current mount tilt correction settings:", "gray");
+    logMessage(QString("  Enable correction: %1").arg(m_mountTilt.enableCorrection ? "YES" : "NO"), 
+              m_mountTilt.enableCorrection ? "green" : "red");
+    logMessage(QString("  Systematic RA offset: %1°").arg(m_mountTilt.systematicRAOffset, 0, 'f', 4), "blue");
+    logMessage(QString("  Systematic Dec offset: %1°").arg(m_mountTilt.systematicDecOffset, 0, 'f', 4), "blue");
+    logMessage(QString("  Geometric north tilt: %1°").arg(m_mountTilt.northTilt, 0, 'f', 4), "gray");
+    logMessage(QString("  Geometric east tilt: %1°").arg(m_mountTilt.eastTilt, 0, 'f', 4), "gray");
+    
+    if (!m_mountTilt.enableCorrection) {
+        logMessage("", "gray");
+        logMessage("Mount correction is DISABLED", "red");
+        logMessage("Enable it through the UI or run calibration to apply systematic offsets", "orange");
+        return;
+    }
+    
+    if (qAbs(m_mountTilt.systematicRAOffset) < 0.01 && qAbs(m_mountTilt.systematicDecOffset) < 0.01) {
+        logMessage("", "gray");
+        logMessage("WARNING: Systematic offsets are very small", "orange");
+        logMessage("Run 'Auto-Calibrate from Processed Files' to calculate proper offsets", "orange");
+        return;
+    }
+    
+    // Test a coordinate conversion to verify offsets are being applied
+    double testAlt = 42.0;
+    double testAz = 287.0;
+    QString testTime = "2024-01-09T22:13:29";
+    
+    // Temporarily disable correction
+    bool originalState = m_mountTilt.enableCorrection;
+    m_mountTilt.enableCorrection = false;
+    
+    double ra_without, dec_without;
+    convertAltAzToRaDec(testAlt, testAz, testTime, ra_without, dec_without);
+    
+    // Re-enable correction
+    m_mountTilt.enableCorrection = originalState;
+    
+    double ra_with, dec_with;
+    convertAltAzToRaDec(testAlt, testAz, testTime, ra_with, dec_with);
+    
+    double actual_ra_offset = ra_with - ra_without;
+    double actual_dec_offset = dec_with - dec_without;
+    
+    // Handle RA wraparound
+    if (actual_ra_offset > 180) actual_ra_offset -= 360;
+    if (actual_ra_offset < -180) actual_ra_offset += 360;
+    
+    logMessage("", "gray");
+    logMessage("Verification test results:", "blue");
+    logMessage(QString("  Test coordinates: Alt=%1°, Az=%2°").arg(testAlt).arg(testAz), "gray");
+    logMessage(QString("  Without correction: RA=%1°, Dec=%2°")
+                  .arg(ra_without, 0, 'f', 4).arg(dec_without, 0, 'f', 4), "gray");
+    logMessage(QString("  With correction:    RA=%1°, Dec=%2°")
+                  .arg(ra_with, 0, 'f', 4).arg(dec_with, 0, 'f', 4), "blue");
+    logMessage(QString("  Actual offset applied: RA=%1°, Dec=%2°")
+                  .arg(actual_ra_offset, 0, 'f', 4).arg(actual_dec_offset, 0, 'f', 4), "green");
+    logMessage(QString("  Expected offset:       RA=%1°, Dec=%2°")
+                  .arg(m_mountTilt.systematicRAOffset, 0, 'f', 4).arg(m_mountTilt.systematicDecOffset, 0, 'f', 4), "orange");
+    
+    bool ra_match = qAbs(actual_ra_offset - m_mountTilt.systematicRAOffset) < 0.001;
+    bool dec_match = qAbs(actual_dec_offset - m_mountTilt.systematicDecOffset) < 0.001;
+    
+    if (ra_match && dec_match) {
+        logMessage("✓ SUCCESS: Systematic offsets are being applied correctly!", "green");
+    } else {
+        logMessage("✗ PROBLEM: Systematic offsets are not being applied correctly", "red");
+        logMessage("Check the convertAltAzToRaDec function implementation", "red");
+    }
+    
+    logMessage("=== END VERIFICATION ===", "blue");
 }

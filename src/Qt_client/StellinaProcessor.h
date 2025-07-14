@@ -132,7 +132,9 @@ void calibrateFromProcessedFiles();
 bool readStellinaDataFromSolvedFits(const QString &fitsPath, ProcessedImageData &data);
 bool readSolveFieldResults(const QString &fitsPath, ProcessedImageData &data);
 void analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, const QDateTime &sessionStart);
-						   
+void testSystematicOffsetCorrection();
+void verifySystematicOffsetsInUse();
+
 private slots:
     // UI slots
     void onSelectSourceDirectory();
@@ -162,20 +164,25 @@ private:
 
 // Mount tilt correction parameters
 
+// Update the MountTiltParams struct in StellinaProcessor.h to include:
+
 struct MountTiltParams {
-    double northTilt;           // Static north tilt θ_N in degrees
-    double eastTilt;            // Static east tilt θ_E in degrees
+    double northTilt;           // Static north tilt θ_N in degrees (deprecated)
+    double eastTilt;            // Static east tilt θ_E in degrees (deprecated)
     double driftRA;             // RA drift rate in degrees per hour
     double driftDec;            // Dec drift rate in degrees per hour
-    double systematicRAOffset;  // Systematic RA offset correction in degrees
-    double systematicDecOffset; // Systematic Dec offset correction in degrees
+    double systematicRAOffset;  // Systematic RA offset correction (deprecated)
+    double systematicDecOffset; // Systematic Dec offset correction (deprecated)
+    double initialRAOffset;     // RA error at session start (t=0)
+    double initialDecOffset;    // Dec error at session start (t=0)
     QDateTime sessionStart;     // Start time of observing session
-    bool enableCorrection;      // Whether to apply static tilt correction
+    bool enableCorrection;      // Whether to apply correction
     bool enableDriftCorrection; // Whether to apply time-dependent drift correction
     
     MountTiltParams() : northTilt(0.0), eastTilt(0.0), 
                        driftRA(0.0), driftDec(0.0),
                        systematicRAOffset(0.0), systematicDecOffset(0.0),
+                       initialRAOffset(0.0), initialDecOffset(0.0),
                        enableCorrection(false), enableDriftCorrection(false) {}
 };
     MountTiltParams m_mountTilt;
