@@ -7,30 +7,16 @@
 #include <QJsonDocument>
 #include <QDateTime>
 #include <QMessageBox>
+// Redesigned clean stage-based processing
+// Replace the startStellinaProcessing function in StellinaProcessor_Processing.cpp
 
 void StellinaProcessor::startStellinaProcessing() {
     if (!validateProcessingInputs()) {
         return;
     }
     
-    logMessage(QString("Starting %1 processing pipeline...")
+    logMessage(QString("Starting %1 processing...")
                   .arg(m_processingModeCombo->currentText()), "blue");
-    
-    // Find images to process
-    if (!findStellinaImages()) {
-        logMessage("No valid Stellina images found in source directory.", "red");
-        return;
-    }
-    
-    // Change Siril working directory
-    QString outputDir = getOutputDirectoryForCurrentStage();
-    bool dirChanged = m_sirilClient->changeDirectory(outputDir);
-    if (!dirChanged) {
-        logMessage("Warning: Failed to change Siril working directory. Will use absolute paths.", "orange");
-        logMessage(QString("Will save files to: %1").arg(outputDir), "blue");
-    } else {
-        logMessage(QString("Changed Siril working directory to: %1").arg(outputDir), "green");
-    }
     
     // Initialize processing state
     m_processing = true;
@@ -48,97 +34,183 @@ void StellinaProcessor::startStellinaProcessing() {
     m_registeredFiles.clear();
     m_finalStackedImage.clear();
     
+    // Determine processing stage and input files based on mode
+    bool success = false;
+    switch (m_processingMode) {
+    case MODE_BASIC_PLATESOLVE:
+        success = setupPlatesolvingStage();
+        break;
+    case MODE_DARK_CALIBRATION:
+        success = setupDarkCalibrationStage();
+        break;
+    case MODE_ASTROMETRIC_STACKING:
+        success = setupStackingStage();
+        break;
+    case MODE_FULL_PIPELINE:
+        success = setupDarkCalibrationStage(); // Start with first stage
+        break;
+    }
+    
+    if (!success) {
+        m_processing = false;
+        return;
+    }
+    
+    // Change Siril working directory to current stage output
+    QString outputDir = getOutputDirectoryForCurrentStage();
+    bool dirChanged = m_sirilClient->changeDirectory(outputDir);
+    if (!dirChanged) {
+        logMessage("Warning: Failed to change Siril working directory.", "orange");
+    } else {
+        logMessage(QString("Set Siril working directory: %1").arg(outputDir), "green");
+    }
+    
     // Set up progress tracking
     m_progressBar->setMaximum(m_imagesToProcess.length());
     m_progressBar->setValue(0);
     
-    // Determine processing stages based on mode
-    switch (m_processingMode) {
-    case MODE_BASIC_PLATESOLVE:
-        m_currentStage = STAGE_PLATE_SOLVING;
-        break;
-    case MODE_DARK_CALIBRATION:
-        m_currentStage = STAGE_DARK_CALIBRATION;
-        break;
-    case MODE_ASTROMETRIC_STACKING:
-        m_currentStage = STAGE_REGISTRATION;
-        break;
-    case MODE_FULL_PIPELINE:
-        m_currentStage = STAGE_DARK_CALIBRATION;
-        break;
-    }
-    
     updateProcessingStatus();
     updateUI();
     
-    logMessage(QString("Found %1 images to process.").arg(m_imagesToProcess.length()), "green");
+    logMessage(QString("Ready to process %1 images in %2 stage")
+                  .arg(m_imagesToProcess.length())
+                  .arg(getStageDescription()), "green");
     
     // Start processing timer
     m_processingTimer->start();
 }
 
+// New setup functions for each stage
+bool StellinaProcessor::setupDarkCalibrationStage() {
+    m_currentStage = STAGE_DARK_CALIBRATION;
+    
+    // Dark calibration always uses raw light frames from source directory
+    if (!findStellinaImages()) {
+        logMessage("No valid Stellina images found in source directory", "red");
+        return false;
+    }
+    
+    logMessage(QString("Dark calibration stage: found %1 raw images to process")
+                  .arg(m_imagesToProcess.size()), "blue");
+    
+    if (m_darkFrames.isEmpty()) {
+        logMessage("Warning: No dark frames available for calibration", "orange");
+    } else {
+        logMessage(QString("Using %1 dark frame groups for calibration")
+                      .arg(m_darkFrames.size()), "blue");
+    }
+    
+    return true;
+}
+
+bool StellinaProcessor::setupPlatesolvingStage() {
+    m_currentStage = STAGE_PLATE_SOLVING;
+    
+    // Plate solving uses dark-calibrated images if available, otherwise fail
+    QDir calibratedDir(m_calibratedDirectory);
+    if (m_calibratedDirectory.isEmpty() || !calibratedDir.exists()) {
+        logMessage("Plate solving requires calibrated images directory to be set", "red");
+        return false;
+    }
+    
+    QStringList calibratedFiles = calibratedDir.entryList(
+        QStringList() << "dark_calibrated_*.fits" << "*calibrated*.fits", 
+        QDir::Files);
+    
+    if (calibratedFiles.isEmpty()) {
+        logMessage("No calibrated images found for plate solving", "red");
+        logMessage("Run dark calibration first or select a directory with calibrated images", "red");
+        return false;
+    }
+    
+    // Build full paths and validate each file has coordinates
+    m_imagesToProcess.clear();
+    int validFiles = 0;
+    
+    for (const QString &fileName : calibratedFiles) {
+        QString fullPath = calibratedDir.absoluteFilePath(fileName);
+        
+        // Check if this calibrated file has Stellina coordinates
+        StellinaImageData imageData;
+        if (readStellinaMetadataFromFits(fullPath, imageData)) {
+            if (imageData.hasValidCoordinates) {
+                m_imagesToProcess.append(fullPath);
+                validFiles++;
+            } else {
+                logMessage(QString("Skipping %1: no coordinates").arg(fileName), "orange");
+            }
+        } else {
+            logMessage(QString("Skipping %1: no Stellina metadata").arg(fileName), "orange");
+        }
+    }
+    
+    if (validFiles == 0) {
+        logMessage("No valid calibrated images with coordinates found", "red");
+        return false;
+    }
+    
+    logMessage(QString("Plate solving stage: found %1 calibrated images to process")
+                  .arg(validFiles), "blue");
+    
+    return true;
+}
+
+bool StellinaProcessor::setupStackingStage() {
+    m_currentStage = STAGE_REGISTRATION;
+    
+    // Stacking uses plate-solved images
+    QDir plateSolvedDir(m_plateSolvedDirectory);
+    if (m_plateSolvedDirectory.isEmpty() || !plateSolvedDir.exists()) {
+        logMessage("Astrometric stacking requires plate-solved images directory to be set", "red");
+        return false;
+    }
+    
+    QStringList plateSolvedFiles = plateSolvedDir.entryList(
+        QStringList() << "plate_solved_*.fits" << "*solved*.fits", 
+        QDir::Files);
+    
+    if (plateSolvedFiles.isEmpty()) {
+        logMessage("No plate-solved images found for stacking", "red");
+        logMessage("Run plate solving first or select a directory with plate-solved images", "red");
+        return false;
+    }
+    
+    // Build full paths
+    m_imagesToProcess.clear();
+    for (const QString &fileName : plateSolvedFiles) {
+        m_imagesToProcess.append(plateSolvedDir.absoluteFilePath(fileName));
+    }
+    
+    logMessage(QString("Astrometric stacking stage: found %1 plate-solved images")
+                  .arg(m_imagesToProcess.size()), "blue");
+    
+    if (m_imagesToProcess.size() < 3) {
+        logMessage("Warning: Need at least 3 images for effective stacking", "orange");
+    }
+    
+    return true;
+}
+
+// Simplified processNextImage that doesn't handle stage transitions
 void StellinaProcessor::processNextImage() {
     if (m_currentImageIndex >= m_imagesToProcess.length()) {
-        // Current stage complete, move to next stage or finish
-        switch (m_currentStage) {
-        case STAGE_DARK_CALIBRATION:
-            if (m_processingMode == MODE_DARK_CALIBRATION) {
-                finishProcessing();
-                return;
-            } else {
-                // Move to plate solving stage
-                m_currentStage = STAGE_PLATE_SOLVING;
-                m_currentImageIndex = 0;
-                // Use dark-calibrated files if available
-                if (!m_darkCalibratedFiles.isEmpty()) {
-                    m_imagesToProcess = m_darkCalibratedFiles;
-                }
-                updateProcessingStatus();
-                return;
-            }
-            break;
-            
-        case STAGE_PLATE_SOLVING:
-            if (m_processingMode == MODE_BASIC_PLATESOLVE) {
-                finishProcessing();
-                return;
-            } else {
-                // Move to registration stage
-                m_currentStage = STAGE_REGISTRATION;
-                if (performAstrometricStacking()) {
-                    m_currentStage = STAGE_COMPLETE;
-                    finishProcessing();
-                } else {
-                    logMessage("Astrometric stacking failed", "red");
-                    finishProcessing();
-                }
-                return;
-            }
-            break;
-            
-        case STAGE_REGISTRATION:
-            if (performAstrometricStacking()) {
-                m_currentStage = STAGE_COMPLETE;
-                finishProcessing();
-            } else {
-                logMessage("Astrometric stacking failed", "red");
-                finishProcessing();
-            }
-            return;
-            
-        default:
+        // Current stage complete
+        if (m_processingMode == MODE_FULL_PIPELINE) {
+            // Handle pipeline stage transitions
+            handlePipelineStageTransition();
+        } else {
+            // Single stage complete
             finishProcessing();
-            return;
         }
+        return;
     }
     
     QString currentFile = m_imagesToProcess[m_currentImageIndex];
     
-    logMessage(QString("Processing image %1 of %2: %3 (Stage: %4)")
+    logMessage(QString("Processing %1 of %2: %3")
                   .arg(m_currentImageIndex + 1)
                   .arg(m_imagesToProcess.length())
-                  .arg(QFileInfo(currentFile).fileName())
-                  .arg(getStageDescription()), "blue");
+                  .arg(QFileInfo(currentFile).fileName()), "blue");
     
     bool success = false;
     
@@ -149,8 +221,14 @@ void StellinaProcessor::processNextImage() {
     case STAGE_PLATE_SOLVING:
         success = processImagePlatesolving(currentFile);
         break;
+    case STAGE_REGISTRATION:
+    case STAGE_STACKING:
+        // These stages will be handled by performAstrometricStacking()
+        success = true; // Just advance through the list
+        break;
     default:
-        success = processImagePlatesolving(currentFile); // fallback
+        logMessage(QString("Unknown processing stage: %1").arg(m_currentStage), "red");
+        success = false;
         break;
     }
     
@@ -173,6 +251,114 @@ void StellinaProcessor::processNextImage() {
     
     m_timeEstimateLabel->setText(QString("Estimated time remaining: %1")
                                     .arg(formatProcessingTime(remaining)));
+}
+
+// Handle full pipeline stage transitions
+void StellinaProcessor::handlePipelineStageTransition() {
+    switch (m_currentStage) {
+    case STAGE_DARK_CALIBRATION:
+        logMessage("Dark calibration stage complete, setting up plate solving...", "blue");
+        if (setupPlatesolvingStage()) {
+            m_currentImageIndex = 0;
+            m_progressBar->setMaximum(m_imagesToProcess.length());
+            m_progressBar->setValue(0);
+            updateProcessingStatus();
+        } else {
+            logMessage("Failed to set up plate solving stage", "red");
+            finishProcessing();
+        }
+        break;
+        
+    case STAGE_PLATE_SOLVING:
+        logMessage("Plate solving stage complete, setting up astrometric stacking...", "blue");
+        if (setupStackingStage()) {
+            m_currentStage = STAGE_REGISTRATION;
+            if (performAstrometricStacking()) {
+                m_currentStage = STAGE_COMPLETE;
+                finishProcessing();
+            } else {
+                logMessage("Astrometric stacking failed", "red");
+                finishProcessing();
+            }
+        } else {
+            logMessage("Failed to set up stacking stage", "red");
+            finishProcessing();
+        }
+        break;
+        
+    default:
+        finishProcessing();
+        break;
+    }
+}
+
+// Simplified plate solving that only works with calibrated files
+bool StellinaProcessor::processImagePlatesolving(const QString &calibratedFitsPath) {
+    m_currentTaskLabel->setText("Plate solving...");
+    
+    // This function now ONLY processes calibrated files
+    if (!calibratedFitsPath.contains("calibrated") && !calibratedFitsPath.contains(m_calibratedDirectory)) {
+        logMessage(QString("ERROR: Plate solving received non-calibrated file: %1").arg(QFileInfo(calibratedFitsPath).fileName()), "red");
+        return false;
+    }
+    
+    // Read Stellina metadata from calibrated FITS file
+    StellinaImageData imageData;
+    if (!readStellinaMetadataFromFits(calibratedFitsPath, imageData)) {
+        logMessage(QString("No Stellina metadata in calibrated file: %1").arg(QFileInfo(calibratedFitsPath).fileName()), "red");
+        return false;
+    }
+    
+    if (!imageData.hasValidCoordinates) {
+        logMessage("No valid coordinates in calibrated file metadata", "red");
+        return false;
+    }
+    
+    // Use pre-calculated coordinates from calibrated file
+    double ra, dec;
+    if (imageData.hasPreCalculatedCoords()) {
+        ra = imageData.calculatedRA;
+        dec = imageData.calculatedDec;
+        logMessage(QString("Using coordinates from calibrated file: RA=%1°, Dec=%2°")
+                      .arg(ra, 0, 'f', 4).arg(dec, 0, 'f', 4), "blue");
+    } else {
+        logMessage("ERROR: Calibrated file missing pre-calculated coordinates", "red");
+        return false;
+    }
+    
+    // Create output file name
+    QString baseName = QFileInfo(calibratedFitsPath).baseName();
+    if (baseName.startsWith("dark_calibrated_")) {
+        baseName = baseName.mid(16); // Remove "dark_calibrated_" prefix
+    }
+    QString outputName = QString("plate_solved_%1.fits").arg(baseName);
+    QString outputPath = QDir(m_plateSolvedDirectory).absoluteFilePath(outputName);
+    
+    // Choose image for plate solving (prefer binned if available)
+    QString plateSolvingImage = calibratedFitsPath;
+    
+    // Perform plate solving
+    logMessage(QString("Plate solving with solve-field: RA=%1°, Dec=%2°").arg(ra, 0, 'f', 4).arg(dec, 0, 'f', 4), "blue");
+    
+    if (!runSolveField(plateSolvingImage, outputPath, ra, dec)) {
+        logMessage("Plate solving failed", "red");
+        return false;
+    }
+    
+    logMessage("Plate solving succeeded!", "green");
+    
+    // Write metadata to plate-solved file
+    StellinaImageData plateSolvedImageData = imageData;
+    plateSolvedImageData.currentFitsPath = outputPath;
+    
+    if (!writeStellinaMetadataWithCoordinates(outputPath, plateSolvedImageData)) {
+        logMessage("Warning: Failed to write metadata to plate-solved file", "orange");
+    } else {
+        updateProcessingStage(outputPath, "PLATE_SOLVED");
+    }
+    
+    m_plateSolvedFiles.append(outputPath);
+    return true;
 }
 
 bool StellinaProcessor::validateProcessingInputs() {
@@ -483,16 +669,15 @@ bool StellinaProcessor::runSolveField(const QString &fitsPath, const QString &ou
     arguments << "--no-plots";            // Don't create plot files
     arguments << "--new-fits" << outputPath;  // Output solved FITS
     arguments << "--scale-units" << "arcsecperpix";
-    arguments << "--scale-low" << "1.0";   // Original pixel scale range
-    arguments << "--scale-high" << "1.5";  // solve-field will auto-adjust for downsampling
+    arguments << "--scale-low" << "1.2";   // Original pixel scale range
+    arguments << "--scale-high" << "1.3";  // solve-field will auto-adjust for downsampling
     arguments << "--ra" << QString::number(ra, 'f', 6);     // Use calculated RA
     arguments << "--dec" << QString::number(dec, 'f', 6);   // Use calculated Dec
-    arguments << "--radius" << "1.0";      // Small search radius since we have good hints
+    arguments << "--radius" << "5.0";      // Small search radius since we have good hints
     arguments << "--cpulimit" << "60";     // 1 minute timeout (faster with hints)
     arguments << "--no-verify";           // Skip verification step
     arguments << "--crpix-center";        // Set reference pixel at center
     arguments << "-z" << "2";             // Debayer the CFA image (CRITICAL for Stellina)
-    arguments << "--downsample" << "2";   // 2x2 binning - solve-field auto-adjusts pixel scale
     
     if (m_debugMode) {
         logMessage(QString("solve-field command: solve-field %1").arg(arguments.join(" ")), "gray");
@@ -515,7 +700,7 @@ bool StellinaProcessor::runSolveField(const QString &fitsPath, const QString &ou
     timer.start();
     bool finished = false;
     
-    while (!finished && timer.elapsed() < 60000) { // 1 minute timeout with hints
+    while (!finished && timer.elapsed() < 600000) { // 1 minute timeout with hints
         finished = solveProcess.waitForFinished(1000);
         QApplication::processEvents(); // Keep UI responsive
         

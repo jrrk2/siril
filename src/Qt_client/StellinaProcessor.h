@@ -339,6 +339,13 @@ private:
     QList<StellinaImageData> m_stellinaImageData;  // Tracks metadata through pipeline
 
     // Add to private function declarations
+   // Stage setup functions for clean pipeline flow
+    bool setupDarkCalibrationStage();
+    bool setupPlatesolvingStage();
+    bool setupStackingStage();
+    void handlePipelineStageTransition();
+    
+    // FITS metadata functions - enhanced version that includes coordinate conversion
     bool writeStellinaMetadataWithCoordinates(const QString &fitsPath, const StellinaImageData &imageData);
     bool readStellinaMetadataFromFits(const QString &fitsPath, StellinaImageData &imageData);
     bool updateProcessingStage(const QString &fitsPath, const QString &stage);
