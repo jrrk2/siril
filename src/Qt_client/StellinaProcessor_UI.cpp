@@ -438,7 +438,8 @@ void StellinaProcessor::setupMenu() {
     tiltMenu->addAction("&Auto-Calibrate from Processed Files", this, &StellinaProcessor::calibrateFromProcessedFiles);
     tiltMenu->addAction("&Test Systematic Correction", this, &StellinaProcessor::testSystematicOffsetCorrection);
     tiltMenu->addAction("&Verify Offsets in Use", this, &StellinaProcessor::verifySystematicOffsetsInUse);
-
+    tiltMenu->addAction("&Fast Calibrate from Stacking JSON", this, &StellinaProcessor::calibrateFromStackingJSON);
+ 
     toolsMenu->addSeparator();
 
     toolsMenu->addAction("&Clear Log", this, &StellinaProcessor::onClearLog);

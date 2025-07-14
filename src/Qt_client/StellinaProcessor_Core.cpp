@@ -4981,3 +4981,454 @@ void StellinaProcessor::plotMountErrors() {
     plotWidget->show();
     logMessage("Error plot window opened. Look for periodic patterns in the residual (bottom) plot.", "green");
 }
+
+// Fast calibration from stacking JSON files
+void StellinaProcessor::calibrateFromStackingJSON() {
+    logMessage("=== FAST MOUNT CALIBRATION FROM STACKING JSON ===", "blue");
+    
+    if (m_sourceDirectory.isEmpty()) {
+        logMessage("Please select source directory containing stacking JSON files", "red");
+        return;
+    }
+    
+    QDir sourceDir(m_sourceDirectory);
+    if (!sourceDir.exists()) {
+        logMessage("Source directory does not exist", "red");
+        return;
+    }
+    
+    // Find all stacking JSON files
+    QStringList jsonFiles = sourceDir.entryList(
+        QStringList() << "*-stacking.json" << "*stacking*.json", 
+        QDir::Files);
+    
+    if (jsonFiles.isEmpty()) {
+        logMessage("No stacking JSON files found in source directory", "red");
+        logMessage("Looking for files like 'img-0001-stacking.json'", "orange");
+        return;
+    }
+    
+    logMessage(QString("Found %1 stacking JSON files").arg(jsonFiles.size()), "blue");
+    
+    // Parse all stacking files
+    QList<StackingCorrectionData> stackingData;
+    QDateTime sessionStart;
+    bool sessionStartSet = false;
+    
+    for (const QString &jsonFile : jsonFiles) {
+        StackingCorrectionData data;
+        QString jsonPath = sourceDir.absoluteFilePath(jsonFile);
+        
+        if (parseStackingJSON(jsonPath, data)) {
+            // Set session start from first valid file
+            if (!sessionStartSet) {
+                sessionStart = data.obsTime;
+                sessionStartSet = true;
+                data.minutesFromStart = 0.0;
+            } else {
+                data.minutesFromStart = sessionStart.msecsTo(data.obsTime) / 60000.0;
+            }
+            
+            stackingData.append(data);
+        }
+    }
+    
+    if (stackingData.size() < 10) {
+        logMessage("Need at least 10 valid stacking files for calibration", "red");
+        return;
+    }
+    
+    // Sort by image number
+    std::sort(stackingData.begin(), stackingData.end(), 
+              [](const StackingCorrectionData &a, const StackingCorrectionData &b) {
+                  return a.imageNumber < b.imageNumber;
+              });
+    
+    logMessage(QString("Successfully parsed %1 stacking corrections").arg(stackingData.size()), "green");
+    logMessage(QString("Time span: %.1f minutes").arg(stackingData.last().minutesFromStart), "blue");
+    
+    // Convert pixel corrections to angular errors and perform regression
+    analyzeStackingCorrections(stackingData, sessionStart);
+}
+
+bool StellinaProcessor::parseStackingJSON(const QString &jsonPath, StackingCorrectionData &data) {
+    QFile file(jsonPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    
+    QJsonParseError error;
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &error);
+    
+    if (error.error != QJsonParseError::NoError) {
+        if (m_debugMode) {
+            logMessage(QString("JSON parse error in %1: %2").arg(jsonPath).arg(error.errorString()), "orange");
+        }
+        return false;
+    }
+    
+    QJsonObject root = doc.object();
+    
+    // Extract image information
+    data.imageFilename = QFileInfo(jsonPath).fileName();
+    
+    // Extract image number from filename (e.g., "img-0200-stacking.json" -> 200)
+    QRegularExpression imgNumRegex(R"(img-(\d+))");
+    QRegularExpressionMatch match = imgNumRegex.match(data.imageFilename);
+    if (!match.hasMatch()) {
+        return false;
+    }
+    data.imageNumber = match.captured(1).toInt();
+    
+    // Extract observation time from acqTime (milliseconds since telescope boot)
+    if (!root.contains("acqTime")) {
+        return false;
+    }
+    
+    qint64 acqTime = root["acqTime"].toVariant().toLongLong();
+    
+    // Convert boot time to real time (this is approximate - you might need to adjust)
+    // For now, use a reasonable estimate based on your session start time
+    QDateTime bootReference = QDateTime::fromString("2024-01-09T22:12:00", "yyyy-MM-ddThh:mm:ss");
+    bootReference.setTimeSpec(Qt::UTC);
+    data.obsTime = bootReference.addMSecs(acqTime - 10000000); // Rough boot offset
+    
+    // Extract mount position
+    if (root.contains("motors")) {
+        QJsonObject motors = root["motors"].toObject();
+        if (motors.contains("ALT") && motors.contains("AZ")) {
+            data.stellinaAlt = motors["ALT"].toDouble();
+            data.stellinaAz = motors["AZ"].toDouble();
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    
+    // Extract stacking correction data
+    if (root.contains("stackingData")) {
+        QJsonObject stackingData = root["stackingData"].toObject();
+        
+        if (stackingData.contains("liveRegistrationResult")) {
+            QJsonObject regResult = stackingData["liveRegistrationResult"].toObject();
+            
+            // Check if registration was successful
+            data.statusMessage = regResult["statusMessage"].toString();
+            if (data.statusMessage != "StackingOk") {
+                return false; // Skip failed registrations
+            }
+            
+            // Extract correction values
+            if (regResult.contains("correction")) {
+                QJsonObject correction = regResult["correction"].toObject();
+                data.correctionX = correction["x"].toDouble();
+                data.correctionY = correction["y"].toDouble();
+                data.correctionRot = correction["rot"].toDouble();
+            } else {
+                return false;
+            }
+            
+            // Extract quality metrics
+            data.starsUsed = regResult["starsUsed"].toInt();
+            data.distanceToCenter = regResult["distanceToCenter"].toDouble();
+            
+            // Quality filter - require reasonable number of stars
+            if (data.starsUsed < 10) {
+                if (m_debugMode) {
+                    logMessage(QString("Skipping %1: only %2 stars used").arg(data.imageFilename).arg(data.starsUsed), "orange");
+                }
+                return false;
+            }
+            
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    
+    data.isValid = true;
+    return true;
+}
+// Improved stacking analysis that handles mosaic patterns
+// Replace the analyzeStackingCorrections function with this version
+
+void StellinaProcessor::analyzeStackingCorrections(const QList<StackingCorrectionData> &stackingData, 
+                                                  const QDateTime &sessionStart) {
+    logMessage("", "gray");
+    logMessage("ANALYZING STACKING CORRECTIONS (MOSAIC-AWARE):", "blue");
+    
+    const double PIXEL_SCALE_ARCSEC = 1.25; 
+    const double PIXEL_SCALE_DEG = PIXEL_SCALE_ARCSEC / 3600.0;
+    
+    // Fix time span display bug
+    double timeSpan = stackingData.last().minutesFromStart - stackingData.first().minutesFromStart;
+    logMessage(QString("Time span: %.1f minutes").arg(timeSpan), "blue");
+    
+    // Use first image as reference
+    double refCorrectionX = stackingData.first().correctionX;
+    double refCorrectionY = stackingData.first().correctionY;
+    
+    logMessage(QString("Reference correction (img-%1): X=%2px, Y=%3px")
+                  .arg(stackingData.first().imageNumber, 4, 10, QChar('0'))
+                  .arg(refCorrectionX, 0, 'f', 1)
+                  .arg(refCorrectionY, 0, 'f', 1), "blue");
+    
+    // Analyze correction patterns to detect mosaic behavior
+    QList<double> xCorrections, yCorrections, timePoints;
+    QMap<QString, int> patternCount;
+    
+    double maxCorrectionMagnitude = 0.0;
+    double totalCorrectionMagnitude = 0.0;
+    int largeJumps = 0;
+    
+    logMessage("", "gray");
+    logMessage("Detecting correction patterns:", "blue");
+    
+    for (int i = 0; i < stackingData.size(); ++i) {
+        const StackingCorrectionData &data = stackingData[i];
+        
+        double deltaX = data.correctionX - refCorrectionX;
+        double deltaY = data.correctionY - refCorrectionY;
+        double magnitude = sqrt(deltaX*deltaX + deltaY*deltaY);
+        
+        xCorrections.append(deltaX);
+        yCorrections.append(deltaY);
+        timePoints.append(data.minutesFromStart);
+        
+        totalCorrectionMagnitude += magnitude;
+        maxCorrectionMagnitude = qMax(maxCorrectionMagnitude, magnitude);
+        
+        // Detect large jumps (likely mosaic position changes)
+        if (magnitude > 100.0) { // 100 pixel threshold
+            largeJumps++;
+        }
+        
+        // Classify correction patterns
+        QString pattern;
+        if (qAbs(deltaX) < 50 && qAbs(deltaY) < 50) {
+            pattern = "fine_tracking";
+        } else if (qAbs(deltaY) > 500) {
+            pattern = "mosaic_y_jump";
+        } else if (qAbs(deltaX) > 200) {
+            pattern = "mosaic_x_jump";
+        } else {
+            pattern = "medium_correction";
+        }
+        
+        patternCount[pattern]++;
+        
+        // Show sample corrections
+        if (i % 50 == 0 || i == stackingData.size() - 1) {
+            logMessage(QString("img-%1 (t=%2min): dX=%3px dY=%4px mag=%5px pattern=%6")
+                          .arg(data.imageNumber, 4, 10, QChar('0'))
+                          .arg(data.minutesFromStart, 0, 'f', 1)
+                          .arg(deltaX, 0, 'f', 1)
+                          .arg(deltaY, 0, 'f', 1)
+                          .arg(magnitude, 0, 'f', 1)
+                          .arg(pattern), "gray");
+        }
+    }
+    
+    double avgCorrectionMagnitude = totalCorrectionMagnitude / stackingData.size();
+    
+    logMessage("", "gray");
+    logMessage("CORRECTION PATTERN ANALYSIS:", "blue");
+    logMessage(QString("Total images analyzed: %1").arg(stackingData.size()), "blue");
+    logMessage(QString("Average correction magnitude: %1 pixels (%.2f arcsec)")
+                  .arg(avgCorrectionMagnitude, 0, 'f', 1)
+                  .arg(avgCorrectionMagnitude * PIXEL_SCALE_ARCSEC, 0, 'f', 1), "blue");
+    logMessage(QString("Maximum correction magnitude: %1 pixels (%.2f arcsec)")
+                  .arg(maxCorrectionMagnitude, 0, 'f', 1)
+                  .arg(maxCorrectionMagnitude * PIXEL_SCALE_ARCSEC, 0, 'f', 1), "blue");
+    logMessage(QString("Large jumps detected: %1").arg(largeJumps), "blue");
+    
+    logMessage("", "gray");
+    logMessage("Pattern breakdown:", "blue");
+    for (auto it = patternCount.begin(); it != patternCount.end(); ++it) {
+        double percentage = (it.value() * 100.0) / stackingData.size();
+        logMessage(QString("  %1: %2 images (%3%)")
+                      .arg(it.key(), -15)
+                      .arg(it.value(), 3)
+                      .arg(percentage, 0, 'f', 1), "gray");
+    }
+    
+    // Determine if this is mosaic or tracking data
+    bool isMosaicData = (largeJumps > stackingData.size() * 0.1); // >10% large jumps
+    bool hasMosaicYJumps = patternCount.contains("mosaic_y_jump") && patternCount["mosaic_y_jump"] > 0;
+    
+    logMessage("", "gray");
+    if (isMosaicData || hasMosaicYJumps) {
+        logMessage("DETECTED: MOSAIC OBSERVATION PATTERN", "orange");
+        logMessage("This appears to be a mosaic observation with multiple pointings.", "orange");
+        logMessage("Standard drift analysis is not applicable to mosaic data.", "orange");
+        logMessage("", "gray");
+        
+        analyzeMosaicCorrections(stackingData, patternCount);
+        
+    } else {
+        logMessage("DETECTED: SINGLE FIELD TRACKING", "green");
+        logMessage("Proceeding with drift analysis for single field observation.", "green");
+        logMessage("", "gray");
+        
+        performDriftAnalysis(stackingData, timePoints, xCorrections, yCorrections, sessionStart);
+    }
+}
+
+void StellinaProcessor::analyzeMosaicCorrections(const QList<StackingCorrectionData> &stackingData,
+                                                const QMap<QString, int> &patternCount) {
+    logMessage("MOSAIC ANALYSIS:", "blue");
+    
+    // For mosaic data, analyze the fine tracking components only
+    QList<double> fineTrackingX, fineTrackingY, fineTrackingTimes;
+    
+    double refX = stackingData.first().correctionX;
+    double refY = stackingData.first().correctionY;
+    
+    for (const StackingCorrectionData &data : stackingData) {
+        double deltaX = data.correctionX - refX;
+        double deltaY = data.correctionY - refY;
+        double magnitude = sqrt(deltaX*deltaX + deltaY*deltaY);
+        
+        // Only include fine tracking corrections (< 50 pixels)
+        if (magnitude < 50.0) {
+            fineTrackingX.append(deltaX);
+            fineTrackingY.append(deltaY);
+            fineTrackingTimes.append(data.minutesFromStart);
+        }
+    }
+    
+    if (fineTrackingX.size() > 10) {
+        logMessage(QString("Analyzing fine tracking from %1 images (excluding mosaic jumps)")
+                      .arg(fineTrackingX.size()), "blue");
+        
+        // Calculate RMS of fine tracking errors
+        double rmsX = 0.0, rmsY = 0.0;
+        for (int i = 0; i < fineTrackingX.size(); ++i) {
+            rmsX += fineTrackingX[i] * fineTrackingX[i];
+            rmsY += fineTrackingY[i] * fineTrackingY[i];
+        }
+        rmsX = sqrt(rmsX / fineTrackingX.size());
+        rmsY = sqrt(rmsY / fineTrackingY.size());
+        
+        const double PIXEL_SCALE_ARCSEC = 1.25;
+        logMessage(QString("Fine tracking RMS: X=%.1fpx (%.1f\"), Y=%.1fpx (%.1f\")")
+                      .arg(rmsX, 0, 'f', 1).arg(rmsX * PIXEL_SCALE_ARCSEC, 0, 'f', 1)
+                      .arg(rmsY, 0, 'f', 1).arg(rmsY * PIXEL_SCALE_ARCSEC, 0, 'f', 1), "green");
+        
+        if (rmsX < 10.0 && rmsY < 10.0) {
+            logMessage("✓ EXCELLENT: Fine tracking errors < 10 pixels", "green");
+            logMessage("Stellina's mount tracking is working well within mosaic pointings", "green");
+        } else if (rmsX < 20.0 && rmsY < 20.0) {
+            logMessage("✓ GOOD: Fine tracking errors < 20 pixels", "green");
+        } else {
+            logMessage("⚠ MODERATE: Fine tracking errors are larger than expected", "orange");
+        }
+    }
+    
+    logMessage("", "gray");
+    logMessage("MOSAIC OBSERVATION RECOMMENDATIONS:", "blue");
+    logMessage("• Mount drift correction is not applicable to mosaic data", "gray");
+    logMessage("• Fine tracking appears adequate for mosaic observations", "gray");
+    logMessage("• Large corrections are normal mosaic positioning adjustments", "gray");
+    logMessage("• Consider analyzing individual mosaic tiles separately", "gray");
+    
+    // Don't apply drift correction for mosaic data
+    logMessage("", "gray");
+    logMessage("Drift correction NOT applied - mosaic pattern detected", "orange");
+}
+
+void StellinaProcessor::performDriftAnalysis(const QList<StackingCorrectionData> &stackingData,
+                                           const QList<double> &timePoints,
+                                           const QList<double> &xCorrections,
+                                           const QList<double> &yCorrections,
+                                           const QDateTime &sessionStart) {
+    // Original drift analysis code (for single field observations)
+    
+    const double PIXEL_SCALE_DEG = 1.25 / 3600.0; // degrees per pixel
+    
+    // Convert corrections to angular errors
+    QList<double> raErrors, decErrors;
+    for (int i = 0; i < xCorrections.size(); ++i) {
+        raErrors.append(xCorrections[i] * PIXEL_SCALE_DEG);
+        decErrors.append(yCorrections[i] * PIXEL_SCALE_DEG);
+    }
+    
+    // Perform linear regression
+    int n = timePoints.size();
+    double sumTime = 0.0, sumRA = 0.0, sumDec = 0.0;
+    double sumTimeSquared = 0.0, sumTimeRA = 0.0, sumTimeDec = 0.0;
+    
+    for (int i = 0; i < n; ++i) {
+        double time = timePoints[i];
+        double raErr = raErrors[i];
+        double decErr = decErrors[i];
+        
+        sumTime += time;
+        sumRA += raErr;
+        sumDec += decErr;
+        sumTimeSquared += time * time;
+        sumTimeRA += time * raErr;
+        sumTimeDec += time * decErr;
+    }
+    
+    double raSlope = (n * sumTimeRA - sumTime * sumRA) / (n * sumTimeSquared - sumTime * sumTime);
+    double raIntercept = (sumRA - raSlope * sumTime) / n;
+    
+    double decSlope = (n * sumTimeDec - sumTime * sumDec) / (n * sumTimeSquared - sumTime * sumTime);
+    double decIntercept = (sumDec - decSlope * sumTime) / n;
+    
+    double raSlope_hourly = raSlope * 60.0;
+    double decSlope_hourly = decSlope * 60.0;
+    
+    // Calculate correlation
+    double raVariance = 0.0, timeVariance = 0.0, raTimeCovariance = 0.0;
+    double raMean = sumRA / n;
+    double timeMean = sumTime / n;
+    
+    for (int i = 0; i < n; ++i) {
+        double deltaRA = raErrors[i] - raMean;
+        double deltaTime = timePoints[i] - timeMean;
+        raVariance += deltaRA * deltaRA;
+        timeVariance += deltaTime * deltaTime;
+        raTimeCovariance += deltaRA * deltaTime;
+    }
+    
+    double raCorrelation = raTimeCovariance / sqrt(raVariance * timeVariance);
+    double raR_squared = raCorrelation * raCorrelation;
+    
+    logMessage("LINEAR REGRESSION RESULTS:", "green");
+    logMessage(QString("RA drift: %1° + %2°/hour * t")
+                  .arg(raIntercept, 0, 'f', 4)
+                  .arg(raSlope_hourly, 0, 'f', 3), "green");
+    logMessage(QString("Dec drift: %1° + %2°/hour * t")
+                  .arg(decIntercept, 0, 'f', 4)
+                  .arg(decSlope_hourly, 0, 'f', 3), "green");
+    logMessage(QString("RA regression R² = %1").arg(raR_squared, 0, 'f', 3), "blue");
+    
+    if (raR_squared > 0.5) {
+        // Apply calibration for good correlations
+        logMessage("", "gray");
+        logMessage("APPLYING DRIFT CALIBRATION:", "green");
+        
+        m_mountTilt.initialRAOffset = raIntercept;
+        m_mountTilt.initialDecOffset = decIntercept;
+        m_mountTilt.driftRA = raSlope_hourly;
+        m_mountTilt.driftDec = decSlope_hourly;
+        m_mountTilt.sessionStart = sessionStart;
+        m_mountTilt.enableCorrection = true;
+        m_mountTilt.enableDriftCorrection = true;
+        m_mountTilt.northTilt = 0.0;
+        m_mountTilt.eastTilt = 0.0;
+        
+        updateTiltUI();
+        saveMountTiltToSettings();
+        
+        logMessage("✓ Drift correction applied and active", "green");
+    } else {
+        logMessage("", "gray");
+        logMessage("⚠ Poor correlation - drift correction not applied", "orange");
+        logMessage("Consider using plate solving calibration method instead", "orange");
+    }
+}

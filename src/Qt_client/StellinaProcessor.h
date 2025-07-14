@@ -91,6 +91,33 @@ struct StellinaImageData {
     }
 };
 
+// Add these functions to StellinaProcessor_Core.cpp for fast mount calibration
+
+struct StackingCorrectionData {
+    QString imageFilename;
+    int imageNumber;
+    QDateTime obsTime;
+    double minutesFromStart;
+    
+    // Mount position
+    double stellinaAlt, stellinaAz;
+    
+    // Stacking corrections (pixels)
+    double correctionX, correctionY, correctionRot;
+    
+    // Registration quality metrics
+    int starsUsed;
+    QString statusMessage;
+    double distanceToCenter;
+    
+    bool isValid;
+    
+    StackingCorrectionData() : imageNumber(0), minutesFromStart(0.0), 
+                              stellinaAlt(0), stellinaAz(0),
+                              correctionX(0), correctionY(0), correctionRot(0),
+                              starsUsed(0), distanceToCenter(0), isValid(false) {}
+};
+
 struct ProcessedImageData {
     QString filename;
     int imageNumber;
@@ -160,7 +187,14 @@ private slots:
     
     // Processing slots
     void onProcessingTimer();
+    // Add this function declaration to StellinaProcessor.h in the private slots section:
+    void calibrateFromStackingJSON();
+    bool parseStackingJSON(const QString &jsonPath, StackingCorrectionData &data);
+    void analyzeStackingCorrections(const QList<StackingCorrectionData> &stackingData, const QDateTime &sessionStart);
 
+    void analyzeMosaicCorrections(const QList<StackingCorrectionData> &stackingData,
+				  const QMap<QString, int> &patternCount);
+  
 private:
 
 // Mount tilt correction parameters
@@ -228,6 +262,11 @@ void testMountTiltCorrection();
 bool loadMountTiltFromSettings();
 void saveMountTiltToSettings();
 void updateTiltUI();
+  void performDriftAnalysis(const QList<StackingCorrectionData> &stackingData,
+                                           const QList<double> &timePoints,
+                                           const QList<double> &xCorrections,
+                                           const QList<double> &yCorrections,
+					       const QDateTime &sessionStart);
     // Dark calibration functions
     void scanDarkFrames();
     bool findMatchingDarkFrame(const QString &lightFrame, DarkFrame &darkFrame); // Deprecated
