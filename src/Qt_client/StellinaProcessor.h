@@ -28,8 +28,6 @@
 #include <QElapsedTimer>
 #include <QProcessEnvironment>
 
-#include "SirilClient.h"
-
 // cfitsio is required for Siril, so we can assume it's available
 #include <fitsio.h>
 
@@ -172,7 +170,6 @@ private slots:
     void onSelectStackedDirectory();
     void onStartProcessing();
     void onStopProcessing();
-    void onTestConnection();
     void onClearLog();
     void onProcessingModeChanged();
     void onRefreshDarkFrames();
@@ -411,7 +408,6 @@ void updateTiltUI();
     QLabel *m_memoryUsageLabel;
     
     // Core components
-    SirilClient *m_sirilClient;
     QTimer *m_processingTimer;
     
     // Processing state

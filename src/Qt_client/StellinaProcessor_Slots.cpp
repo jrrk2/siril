@@ -16,8 +16,6 @@ void StellinaProcessor::connectSignals() {
             this, &StellinaProcessor::onStartProcessing);
     connect(m_stopButton, &QPushButton::clicked,
             this, &StellinaProcessor::onStopProcessing);
-    connect(m_testConnectionButton, &QPushButton::clicked,
-            this, &StellinaProcessor::onTestConnection);
     connect(m_clearLogButton, &QPushButton::clicked,
             this, &StellinaProcessor::onClearLog);
     connect(m_refreshDarkButton, &QPushButton::clicked,
@@ -28,16 +26,6 @@ void StellinaProcessor::connectSignals() {
     // Processing mode combo
     connect(m_processingModeCombo, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
             this, &StellinaProcessor::onProcessingModeChanged);
-    
-    // Siril client signals
-    connect(m_sirilClient, &SirilClient::connected,
-            this, &StellinaProcessor::onSirilConnected);
-    connect(m_sirilClient, &SirilClient::disconnected,
-            this, &StellinaProcessor::onSirilDisconnected);
-    connect(m_sirilClient, &SirilClient::commandExecuted,
-            this, &StellinaProcessor::onSirilCommandExecuted);
-    connect(m_sirilClient, &SirilClient::errorOccurred,
-            this, &StellinaProcessor::onSirilError);
     
     // Processing timer
     connect(m_processingTimer, &QTimer::timeout,
@@ -254,20 +242,6 @@ void StellinaProcessor::onStopProcessing() {
     }
 }
 
-void StellinaProcessor::onTestConnection() {
-    if (m_sirilClient->isConnected()) {
-        m_sirilClient->disconnectFromSiril();
-    } else {
-        logMessage("Attempting to connect to Siril...", "blue");
-        if (m_sirilClient->connectToSiril()) {
-            logMessage("Successfully connected to Siril!", "green");
-        } else {
-            logMessage(QString("Failed to connect: %1").arg(m_sirilClient->lastError()), "red");
-        }
-    }
-    updateUI();
-}
-
 void StellinaProcessor::onClearLog() {
     m_logTextEdit->clear();
     logMessage("Log cleared.", "gray");
@@ -289,11 +263,6 @@ void StellinaProcessor::onPreviewStacking() {
     
     if (m_imagesToProcess.size() < 3) {
         QMessageBox::warning(this, "Insufficient Images", "Need at least 3 images for preview stacking.");
-        return;
-    }
-    
-    if (!m_sirilClient->isConnected()) {
-        QMessageBox::warning(this, "Connection Error", "Please connect to Siril first.");
         return;
     }
     
@@ -341,12 +310,6 @@ void StellinaProcessor::onStackingParametersChanged() {
 // Siril Event Handlers
 void StellinaProcessor::onSirilConnected() {
     logMessage("Connected to Siril successfully!", "green");
-    
-    QString workDir = m_sirilClient->getWorkingDirectory();
-    if (!workDir.isEmpty()) {
-        logMessage(QString("Siril working directory: %1").arg(workDir), "blue");
-    }
-    
     updateUI();
 }
 
@@ -372,7 +335,6 @@ void StellinaProcessor::onProcessingTimer() {
 
 // UI Update Functions
 void StellinaProcessor::updateUI() {
-    bool connected = m_sirilClient->isConnected();
     bool hasSource = !m_sourceDirectory.isEmpty();
     bool hasRequiredOutputs = false;
     
@@ -394,7 +356,7 @@ void StellinaProcessor::updateUI() {
         break;
     }
     
-    bool canProcess = connected && hasSource && hasRequiredOutputs && !m_processing;
+    bool canProcess = hasSource && hasRequiredOutputs && !m_processing;
     
     m_startButton->setEnabled(canProcess);
     m_stopButton->setEnabled(m_processing);
@@ -405,16 +367,6 @@ void StellinaProcessor::updateUI() {
 
 // Update UI to show connection type
 void StellinaProcessor::updateConnectionStatus() {
-    if (m_sirilClient->isConnected()) {
-        QString connectionType = m_sirilClient->isUsingCLI() ? "siril-cli" : "Siril GUI";
-        m_connectionStatus->setText(QString("Connected to %1").arg(connectionType));
-        m_connectionStatus->setStyleSheet("color: green; font-weight: bold;");
-        m_testConnectionButton->setText("Disconnect");
-    } else {
-        m_connectionStatus->setText("Not connected");
-        m_connectionStatus->setStyleSheet("color: red; font-weight: bold;");
-        m_testConnectionButton->setText("Test Connection");
-    }
 }
 
 void StellinaProcessor::logMessage(const QString &message, const QString &color) {

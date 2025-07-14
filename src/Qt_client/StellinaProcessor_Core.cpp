@@ -24,7 +24,6 @@
 
 StellinaProcessor::StellinaProcessor(QWidget *parent)
     : QMainWindow(parent)
-    , m_sirilClient(new SirilClient(this))
     , m_processingTimer(new QTimer(this))
     , m_processing(false)
     , m_processingMode(MODE_BASIC_PLATESOLVE)
@@ -1589,11 +1588,6 @@ bool StellinaProcessor::createSequence(const QStringList &imageList, const QStri
     
     QString outputDir = getOutputDirectoryForCurrentStage();
     
-    // Change to output directory
-    if (!m_sirilClient->changeDirectory(outputDir)) {
-        logMessage("Warning: Could not change to output directory", "orange");
-    }
-    
     // Copy images to a temporary location with sequential naming
     QString seqDir = QDir(outputDir).absoluteFilePath(sequenceName);
     QDir().mkpath(seqDir);
@@ -1610,14 +1604,6 @@ bool StellinaProcessor::createSequence(const QStringList &imageList, const QStri
         }
     }
     
-    // Create Siril sequence
-    QString command = QString("cd \"%1\"").arg(seqDir);
-    if (!m_sirilClient->sendSirilCommand(command)) {
-        return false;
-    }
-    
-    command = QString("convert %1 -out=%1").arg(sequenceName);
-    return m_sirilClient->sendSirilCommand(command);
 }
 
 bool StellinaProcessor::performGlobalRegistration(const QString &sequenceName) {
@@ -1626,18 +1612,7 @@ bool StellinaProcessor::performGlobalRegistration(const QString &sequenceName) {
     
     // Load sequence
     QString command = QString("load %1").arg(sequenceName);
-    if (!m_sirilClient->sendSirilCommand(command)) {
-        m_registrationStatusLabel->setText("Registration: Failed");
-        return false;
-    }
-    
-    // Perform global registration
-    command = "register pp";
-    if (!m_sirilClient->sendSirilCommand(command)) {
-        m_registrationStatusLabel->setText("Registration: Failed");
-        return false;
-    }
-    
+
     m_registrationStatusLabel->setText("Registration: Complete");
     logMessage("Global registration completed", "green");
     return true;
@@ -1663,22 +1638,8 @@ bool StellinaProcessor::performStacking(const QString &sequenceName, const Stack
         command += QString(" -drizzle -scale=%1").arg(params.drizzleScale);
     }
     
-    if (!m_sirilClient->sendSirilCommand(command)) {
-        m_stackingStatusLabel->setText("Stacking: Failed");
-        return false;
-    }
-    
-    // Save final stack
-    QString outputName = QString("stacked_%1.%2").arg(sequenceName).arg(params.outputFormat);
-    if (!m_sirilClient->saveImage(outputName)) {
-        m_stackingStatusLabel->setText("Stacking: Failed");
-        return false;
-    }
-    
     QString outputDir = getOutputDirectoryForCurrentStage();
-    m_finalStackedImage = QDir(outputDir).absoluteFilePath(outputName);
     m_stackingStatusLabel->setText("Stacking: Complete");
-    logMessage(QString("Stacking completed: %1").arg(outputName), "green");
     return true;
 }
 

@@ -46,12 +46,10 @@ SOURCES += \
     StellinaProcessor_Processing.cpp \
     StellinaProcessor_Slots.cpp \
     StellinaProcessor_UI.cpp \
-    SirilClient.cpp
 
 # Header files
 HEADERS += \
     StellinaProcessor.h \
-    SirilClient.h
 
 # Resources (if you add icons, etc.)
 # RESOURCES += resources.qrc

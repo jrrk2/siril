@@ -35,18 +35,6 @@ void StellinaProcessor::setupUI() {
 void StellinaProcessor::setupBasicTab() {
     QVBoxLayout *layout = new QVBoxLayout(m_basicTab);
     
-    // Connection group
-    m_connectionGroup = new QGroupBox("Siril Connection");
-    QHBoxLayout *connectionLayout = new QHBoxLayout(m_connectionGroup);
-    
-    m_testConnectionButton = new QPushButton("Test Connection");
-    m_connectionStatus = new QLabel("Not connected");
-    m_connectionStatus->setStyleSheet("color: red; font-weight: bold;");
-    
-    connectionLayout->addWidget(m_testConnectionButton);
-    connectionLayout->addWidget(m_connectionStatus);
-    connectionLayout->addStretch();
-    
     // Processing mode group
     m_modeGroup = new QGroupBox("Processing Mode");
     QVBoxLayout *modeLayout = new QVBoxLayout(m_modeGroup);
@@ -408,7 +396,6 @@ void StellinaProcessor::setupMenu() {
     
     // Tools menu
     QMenu *toolsMenu = menuBar->addMenu("&Tools");
-    toolsMenu->addAction("Test &Connection", this, &StellinaProcessor::onTestConnection);
     toolsMenu->addAction("&Refresh Dark Frames", this, &StellinaProcessor::onRefreshDarkFrames);
     toolsMenu->addSeparator();
 
@@ -462,9 +449,8 @@ void StellinaProcessor::setupMenu() {
     QMenu *helpMenu = menuBar->addMenu("&Help");
     helpMenu->addAction("&About", [this]() {
         QMessageBox::about(this, "About Enhanced Stellina Processor",
-                          "Enhanced Stellina Processor for Siril v2.0\n\n"
+                          "Enhanced Stellina Processor v2.0\n\n"
                           "A Qt application for advanced processing of Stellina telescope images\n"
-                          "using Siril's capabilities.\n\n"
                           "New Features:\n"
                           "• Dark frame calibration with automatic matching\n"
                           "• Astrometric registration and stacking\n"

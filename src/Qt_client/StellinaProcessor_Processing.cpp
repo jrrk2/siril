@@ -56,15 +56,6 @@ void StellinaProcessor::startStellinaProcessing() {
         return;
     }
     
-    // Change Siril working directory to current stage output
-    QString outputDir = getOutputDirectoryForCurrentStage();
-    bool dirChanged = m_sirilClient->changeDirectory(outputDir);
-    if (!dirChanged) {
-        logMessage("Warning: Failed to change Siril working directory.", "orange");
-    } else {
-        logMessage(QString("Set Siril working directory: %1").arg(outputDir), "green");
-    }
-    
     // Set up progress tracking
     m_progressBar->setMaximum(m_imagesToProcess.length());
     m_progressBar->setValue(0);
@@ -362,11 +353,6 @@ bool StellinaProcessor::processImagePlatesolving(const QString &calibratedFitsPa
 }
 
 bool StellinaProcessor::validateProcessingInputs() {
-    if (!m_sirilClient->isConnected()) {
-        QMessageBox::warning(this, "Connection Error", "Please connect to Siril first.");
-        return false;
-    }
-    
     if (m_sourceDirectory.isEmpty()) {
         QMessageBox::warning(this, "Directory Error", "Please select the raw light frames directory.");
         return false;
