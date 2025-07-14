@@ -351,6 +351,20 @@ void StellinaProcessor::setupMenu() {
     toolsMenu->addAction("&Refresh Dark Frames", this, &StellinaProcessor::onRefreshDarkFrames);
     toolsMenu->addSeparator();
     toolsMenu->addAction("&Clear Log", this, &StellinaProcessor::onClearLog);
+
+    toolsMenu->addAction("Diagnose Sidereal Time", this, &StellinaProcessor::diagnoseSiderealTimeIssues);
+    toolsMenu->addAction("Diagnose Coordinate conversion", this, &StellinaProcessor::testFixedCoordinateConversion);
+    toolsMenu->addAction("Diagnose Tracking Issue", this, &StellinaProcessor::diagnoseTrackingIssue);
+    toolsMenu->addAction("Analyze Coordinate errors", this, &StellinaProcessor::analyzeRealCoordinateErrors);
+    toolsMenu->addAction("Test All Coordinate Variations", this, &StellinaProcessor::testAllCoordinateVariations);
+    toolsMenu->addAction("Test Time Drift Fix", this, &StellinaProcessor::testTimeDriftFix);
+    toolsMenu->addAction("analyzeRealStellinaIssue", this, &StellinaProcessor::analyzeRealStellinaIssue);
+    toolsMenu->addAction("testRealisticAccuracy", this, &StellinaProcessor::testRealisticAccuracy);
+    toolsMenu->addAction("verifyPlatesolvingHints", this, &StellinaProcessor::verifyPlatesolvingHints);
+    // Add to your Tools menu:
+    toolsMenu->addAction("Dump Coordinate Data", this, &StellinaProcessor::dumpCoordinateData);
+    toolsMenu->addAction("Export Coordinates to CSV", this, &StellinaProcessor::dumpCoordinateDataToCSV);
+    toolsMenu->addAction("Analyze Coordinate Drift", this, &StellinaProcessor::analyzeCoordinateDrift);
     
     // Help menu
     QMenu *helpMenu = menuBar->addMenu("&Help");

@@ -97,7 +97,26 @@ class StellinaProcessor : public QMainWindow {
 public:
     explicit StellinaProcessor(QWidget *parent = nullptr);
     ~StellinaProcessor();
-
+    void diagnoseSiderealTimeIssues();
+    void testFixedCoordinateConversion();
+    void diagnoseStellinaProcessing();
+    void verifyCorrectProcessing(); 
+    void analyzeRealCoordinateErrors();
+    bool processImagePlatesolving_Fixed(const QString &calibratedFitsPath);
+    void diagnoseTrackingIssue();
+  void debugCoordinateSystem() ;				
+  void testStellinaAzimuthConvention() ;
+ double calculateLST_HighPrecision(double JD, double longitude);
+ void diagnoseLSTAccuracy();
+ void testTimeDriftFix();
+  void analyzeRealStellinaIssue();
+  void testRealisticAccuracy();
+  void verifyPlatesolvingHints();
+// Add these to your header file:
+ void dumpCoordinateData();
+ void dumpCoordinateDataToCSV();
+ void analyzeCoordinateDrift();
+						   
 private slots:
     // UI slots
     void onSelectSourceDirectory();
@@ -150,6 +169,13 @@ private:
     bool convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec);
     bool checkStellinaQuality(const QJsonObject &json);
     QString getStageDescription() const;
+void altAzToRaDec_Debug(double alt, double az, double lat, double lst, 
+					   double &ra, double &dec, const QString &convention);
+void altAzToRaDec_HourAngleTest(double alt, double az, double lat, double lst, 
+						   double &ra, double &dec, bool subtractH) ;
+  void altAzToRaDec_Standard(double alt, double az, double lat, double lst, double &ra, double &dec);
+  void altAzToRaDec_StellinaFixed(double alt, double az, double lat, double lst, double &ra, double &dec) ;
+  void testAllCoordinateVariations() ;
     
     // Dark calibration functions
     void scanDarkFrames();
