@@ -456,7 +456,7 @@ void StellinaProcessor::setupMenu() {
     toolsMenu->addAction("Dump Coordinate Data", this, &StellinaProcessor::dumpCoordinateData);
     toolsMenu->addAction("Export Coordinates to CSV", this, &StellinaProcessor::dumpCoordinateDataToCSV);
     toolsMenu->addAction("Analyze Coordinate Drift", this, &StellinaProcessor::analyzeCoordinateDrift);
-    
+    toolsMenu->addAction("&Plot Mount Errors", this, &StellinaProcessor::plotMountErrors);    
     // Help menu
     QMenu *helpMenu = menuBar->addMenu("&Help");
     helpMenu->addAction("&About", [this]() {

@@ -128,12 +128,13 @@ public:
  void dumpCoordinateData();
  void dumpCoordinateDataToCSV();
  void analyzeCoordinateDrift();
-void calibrateFromProcessedFiles();
-bool readStellinaDataFromSolvedFits(const QString &fitsPath, ProcessedImageData &data);
-bool readSolveFieldResults(const QString &fitsPath, ProcessedImageData &data);
-void analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, const QDateTime &sessionStart);
-void testSystematicOffsetCorrection();
-void verifySystematicOffsetsInUse();
+ void calibrateFromProcessedFiles();
+ bool readStellinaDataFromSolvedFits(const QString &fitsPath, ProcessedImageData &data);
+ bool readSolveFieldResults(const QString &fitsPath, ProcessedImageData &data);
+ void analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, const QDateTime &sessionStart);
+ void testSystematicOffsetCorrection();
+ void verifySystematicOffsetsInUse();
+ void plotMountErrors();
 
 private slots:
     // UI slots
