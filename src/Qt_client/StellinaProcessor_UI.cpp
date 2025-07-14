@@ -176,6 +176,30 @@ void StellinaProcessor::setupBasicTab() {
     m_tiltStatusLabel = new QLabel("Tilt correction disabled");
     m_tiltStatusLabel->setStyleSheet("color: gray; font-style: italic;");
     tiltLayout->addWidget(m_tiltStatusLabel, 4, 0, 1, 3);
+
+    m_enableDriftCorrectionCheck = new QCheckBox("Enable drift correction");
+    m_enableDriftCorrectionCheck->setChecked(false);
+    tiltLayout->addWidget(m_enableDriftCorrectionCheck, 5, 0, 1, 3);
+
+    tiltLayout->addWidget(new QLabel("RA Drift (°/h):"), 6, 0);
+    m_driftRASpin = new QDoubleSpinBox;
+    m_driftRASpin->setRange(-10.0, 10.0);
+    m_driftRASpin->setValue(0.0);
+    m_driftRASpin->setDecimals(3);
+    m_driftRASpin->setSuffix("°/h");
+    tiltLayout->addWidget(m_driftRASpin, 6, 1);
+
+    tiltLayout->addWidget(new QLabel("Dec Drift (°/h):"), 7, 0);
+    m_driftDecSpin = new QDoubleSpinBox;
+    m_driftDecSpin->setRange(-10.0, 10.0);
+    m_driftDecSpin->setValue(0.0);
+    m_driftDecSpin->setDecimals(3);
+    m_driftDecSpin->setSuffix("°/h");
+    tiltLayout->addWidget(m_driftDecSpin, 7, 1);
+
+    m_driftStatusLabel = new QLabel("Drift correction disabled");
+    m_driftStatusLabel->setStyleSheet("color: gray; font-style: italic;");
+    tiltLayout->addWidget(m_driftStatusLabel, 8, 0, 1, 3);
     
     // Processing group
     m_processingGroup = new QGroupBox("Processing Control");
@@ -388,17 +412,30 @@ void StellinaProcessor::setupMenu() {
     toolsMenu->addAction("&Refresh Dark Frames", this, &StellinaProcessor::onRefreshDarkFrames);
     toolsMenu->addSeparator();
 
-    // Mount tilt menu items
+    // Enhanced Mount tilt submenu
     QMenu *tiltMenu = toolsMenu->addMenu("Mount &Tilt");
-    tiltMenu->addAction("&Calibrate Mount Tilt", this, &StellinaProcessor::calibrateMountTilt);
-    tiltMenu->addAction("&Test Tilt Correction", this, &StellinaProcessor::testMountTiltCorrection);
+    /*
+    tiltMenu->addAction("&Enhanced Calibration (with Drift)", this, &StellinaProcessor::calibrateMountWithDrift);
     tiltMenu->addSeparator();
-    tiltMenu->addAction("Enable Tilt Correction", [this]() {
+    tiltMenu->addAction("&Basic Auto-Calibrate", this, &StellinaProcessor::autoCalibrateTiltFromSolveResults);
+    tiltMenu->addAction("&Fine-Tune Parameters", this, &StellinaProcessor::fineTuneMountTilt);
+     */
+    tiltMenu->addSeparator();
+    tiltMenu->addAction("&Test Tilt Correction", this, &StellinaProcessor::testMountTiltCorrection);
+    tiltMenu->addAction("&Manual Calibrate", this, &StellinaProcessor::calibrateMountTilt);
+    tiltMenu->addSeparator();
+    tiltMenu->addAction("Enable/Disable Tilt Correction", [this]() {
         m_mountTilt.enableCorrection = !m_mountTilt.enableCorrection;
-        m_enableTiltCorrectionCheck->setChecked(m_mountTilt.enableCorrection);
         updateTiltUI();
         saveMountTiltToSettings();
+        logMessage(QString("Mount tilt correction %1").arg(m_mountTilt.enableCorrection ? "enabled" : "disabled"), "blue");
     });
+    tiltMenu->addAction("Enable/Disable Drift Correction", [this]() {
+        m_mountTilt.enableDriftCorrection = !m_mountTilt.enableDriftCorrection;
+        saveMountTiltToSettings();
+        logMessage(QString("Mount drift correction %1").arg(m_mountTilt.enableDriftCorrection ? "enabled" : "disabled"), "blue");
+    });
+    tiltMenu->addAction("&Auto-Calibrate from Processed Files", this, &StellinaProcessor::calibrateFromProcessedFiles);
     
     toolsMenu->addSeparator();
 

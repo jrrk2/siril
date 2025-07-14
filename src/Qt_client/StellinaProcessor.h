@@ -91,6 +91,17 @@ struct StellinaImageData {
     }
 };
 
+struct ProcessedImageData {
+    QString filename;
+    int imageNumber;
+    double stellinaAlt, stellinaAz;
+    double predictedRA, predictedDec;
+    double solvedRA, solvedDec;
+    QString dateObs;
+    QDateTime obsTime;
+    double minutesFromStart;
+    bool isValid;
+};
 
 class StellinaProcessor : public QMainWindow {
     Q_OBJECT
@@ -117,6 +128,10 @@ public:
  void dumpCoordinateData();
  void dumpCoordinateDataToCSV();
  void analyzeCoordinateDrift();
+void calibrateFromProcessedFiles();
+bool readStellinaDataFromSolvedFits(const QString &fitsPath, ProcessedImageData &data);
+bool readSolveFieldResults(const QString &fitsPath, ProcessedImageData &data);
+void analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, const QDateTime &sessionStart);
 						   
 private slots:
     // UI slots
@@ -146,12 +161,22 @@ private slots:
 private:
 
 // Mount tilt correction parameters
+
 struct MountTiltParams {
-    double northTilt;     // North tilt θ_N in degrees
-    double eastTilt;      // East tilt θ_E in degrees
-    bool enableCorrection; // Whether to apply tilt correction
+    double northTilt;           // Static north tilt θ_N in degrees
+    double eastTilt;            // Static east tilt θ_E in degrees
+    double driftRA;             // RA drift rate in degrees per hour
+    double driftDec;            // Dec drift rate in degrees per hour
+    double systematicRAOffset;  // Systematic RA offset correction in degrees
+    double systematicDecOffset; // Systematic Dec offset correction in degrees
+    QDateTime sessionStart;     // Start time of observing session
+    bool enableCorrection;      // Whether to apply static tilt correction
+    bool enableDriftCorrection; // Whether to apply time-dependent drift correction
     
-    MountTiltParams() : northTilt(1.0832), eastTilt(2.4314), enableCorrection(false) {}
+    MountTiltParams() : northTilt(0.0), eastTilt(0.0), 
+                       driftRA(0.0), driftDec(0.0),
+                       systematicRAOffset(0.0), systematicDecOffset(0.0),
+                       enableCorrection(false), enableDriftCorrection(false) {}
 };
     MountTiltParams m_mountTilt;
 
@@ -195,7 +220,6 @@ void testMountTiltCorrection();
 bool loadMountTiltFromSettings();
 void saveMountTiltToSettings();
 void updateTiltUI();
-    
     // Dark calibration functions
     void scanDarkFrames();
     bool findMatchingDarkFrame(const QString &lightFrame, DarkFrame &darkFrame); // Deprecated
@@ -330,6 +354,10 @@ void updateTiltUI();
     QPushButton *m_calibrateTiltButton;
     QPushButton *m_testTiltButton;
     QLabel *m_tiltStatusLabel;
+    QCheckBox *m_enableDriftCorrectionCheck;
+    QDoubleSpinBox *m_driftRASpin;
+    QDoubleSpinBox *m_driftDecSpin;
+    QLabel *m_driftStatusLabel;
   
     // Status bar
     QLabel *m_statusLabel;

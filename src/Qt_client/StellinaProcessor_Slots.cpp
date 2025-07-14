@@ -130,6 +130,24 @@ void StellinaProcessor::connectSignals() {
 
     connect(m_testTiltButton, &QPushButton::clicked, 
 	    this, &StellinaProcessor::testMountTiltCorrection);
+
+    connect(m_enableDriftCorrectionCheck, &QCheckBox::toggled, [this](bool checked) {
+	m_mountTilt.enableDriftCorrection = checked;
+	updateTiltUI();
+	saveMountTiltToSettings();
+    });
+
+    connect(m_driftRASpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
+	    [this](double value) {
+	m_mountTilt.driftRA = value;
+	saveMountTiltToSettings();
+    });
+
+    connect(m_driftDecSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
+	    [this](double value) {
+	m_mountTilt.driftDec = value;
+	saveMountTiltToSettings();
+    });
     
 }
 
@@ -417,22 +435,53 @@ void StellinaProcessor::logMessage(const QString &message, const QString &color)
     }
 }
 
-
 void StellinaProcessor::updateTiltUI() {
-    bool enabled = m_mountTilt.enableCorrection;
+    if (!m_enableTiltCorrectionCheck) return;
     
-    m_northTiltSpin->setEnabled(enabled);
-    m_eastTiltSpin->setEnabled(enabled);
-    m_calibrateTiltButton->setEnabled(enabled);
-    m_testTiltButton->setEnabled(enabled);
+    bool tiltEnabled = m_mountTilt.enableCorrection;
+    bool driftEnabled = m_mountTilt.enableDriftCorrection;
     
-    if (enabled) {
+    // Update tilt UI
+    m_northTiltSpin->setEnabled(tiltEnabled);
+    m_eastTiltSpin->setEnabled(tiltEnabled);
+    m_calibrateTiltButton->setEnabled(tiltEnabled);
+    m_testTiltButton->setEnabled(tiltEnabled);
+    
+    // Update drift UI
+    if (m_enableDriftCorrectionCheck) {
+        m_enableDriftCorrectionCheck->setEnabled(tiltEnabled);
+        m_driftRASpin->setEnabled(tiltEnabled && driftEnabled);
+        m_driftDecSpin->setEnabled(tiltEnabled && driftEnabled);
+        
+        m_enableDriftCorrectionCheck->setChecked(driftEnabled);
+        m_driftRASpin->setValue(m_mountTilt.driftRA);
+        m_driftDecSpin->setValue(m_mountTilt.driftDec);
+    }
+    
+    // Update status labels
+    if (tiltEnabled) {
         m_tiltStatusLabel->setText(QString("Tilt correction enabled: θ_N=%1°, θ_E=%2°")
                                       .arg(m_mountTilt.northTilt, 0, 'f', 4)
                                       .arg(m_mountTilt.eastTilt, 0, 'f', 4));
         m_tiltStatusLabel->setStyleSheet("color: green; font-weight: bold;");
+        
+        if (m_driftStatusLabel) {
+            if (driftEnabled) {
+                m_driftStatusLabel->setText(QString("Drift correction: %1°/h RA, %2°/h Dec")
+                                              .arg(m_mountTilt.driftRA, 0, 'f', 3)
+                                              .arg(m_mountTilt.driftDec, 0, 'f', 3));
+                m_driftStatusLabel->setStyleSheet("color: green; font-weight: bold;");
+            } else {
+                m_driftStatusLabel->setText("Drift correction disabled");
+                m_driftStatusLabel->setStyleSheet("color: gray; font-style: italic;");
+            }
+        }
     } else {
         m_tiltStatusLabel->setText("Tilt correction disabled");
         m_tiltStatusLabel->setStyleSheet("color: gray; font-style: italic;");
+        if (m_driftStatusLabel) {
+            m_driftStatusLabel->setText("Drift correction disabled");
+            m_driftStatusLabel->setStyleSheet("color: gray; font-style: italic;");
+        }
     }
 }
