@@ -2153,11 +2153,10 @@ bool StellinaProcessor::createBinnedImageForPlatesolving(const QString &inputPat
                   .arg(QFileInfo(binnedPath).fileName()).arg(binnedWidth).arg(binnedHeight), "green");
     return true;
 }
-
-// Modified findStellinaImages function
+// Modified findStellinaImages function to support reversed images
 bool StellinaProcessor::findStellinaImages() {
     m_imagesToProcess.clear();
-    m_stellinaImageData.clear(); // New member variable: QList<StellinaImageData>
+    m_stellinaImageData.clear();
     
     QDir sourceDir(m_sourceDirectory);
     if (!sourceDir.exists()) {
@@ -2173,29 +2172,60 @@ bool StellinaProcessor::findStellinaImages() {
     int validPairs = 0;
     int jsonMissing = 0;
     int qualityRejected = 0;
+    int reversedImages = 0;
     
     for (const QString &fitsFile : fitsFiles) {
         StellinaImageData imageData;
         imageData.originalFitsPath = sourceDir.absoluteFilePath(fitsFile);
         imageData.currentFitsPath = imageData.originalFitsPath;
         
+        // Check if this is a reversed stellina image
+        imageData.isReversedImage = isReversedStellinaImage(fitsFile);
+        if (imageData.isReversedImage) {
+            reversedImages++;
+            logMessage(QString("Found reversed Stellina image: %1").arg(fitsFile), "blue");
+        }
+        
+        // Get base name (without 'r' suffix for reversed images)
+        imageData.baseName = getBaseName(fitsFile);
+        
+        // Detect bayer pattern
+        imageData.bayerPattern = detectBayerPattern(imageData.originalFitsPath);
+        
         QString baseName = QFileInfo(fitsFile).baseName();
         
         // Try to find corresponding JSON file
-        QStringList jsonCandidates = {
-            baseName + ".json",
-            baseName + ".JSON",
-            baseName + "-stacking.json",
-            baseName + "-stacking.JSON",
-            QFileInfo(fitsFile).completeBaseName() + ".json",
-            QFileInfo(fitsFile).completeBaseName() + ".JSON",
-            QFileInfo(fitsFile).completeBaseName() + "-stacking.json",
-            QFileInfo(fitsFile).completeBaseName() + "-stacking.JSON"
-        };
+        // For reversed images, look for JSON files both with and without 'r' suffix
+        QStringList jsonCandidates;
+        
+        if (imageData.isReversedImage) {
+            // For img-0001r.fits, try both img-0001r.json and img-0001.json
+            jsonCandidates << baseName + ".json"
+                          << baseName + ".JSON"
+                          << imageData.baseName + ".json"
+                          << imageData.baseName + ".JSON"
+                          << baseName + "-stacking.json"
+                          << baseName + "-stacking.JSON"
+                          << imageData.baseName + "-stacking.json"
+                          << imageData.baseName + "-stacking.JSON";
+        } else {
+            // Regular candidates for normal images
+            jsonCandidates << baseName + ".json"
+                          << baseName + ".JSON"
+                          << baseName + "-stacking.json"
+                          << baseName + "-stacking.JSON";
+        }
+        
+        // Add complete base name candidates
+        jsonCandidates << QFileInfo(fitsFile).completeBaseName() + ".json"
+                      << QFileInfo(fitsFile).completeBaseName() + ".JSON"
+                      << QFileInfo(fitsFile).completeBaseName() + "-stacking.json"
+                      << QFileInfo(fitsFile).completeBaseName() + "-stacking.JSON";
         
         bool jsonFound = false;
         for (const QString &candidate : jsonCandidates) {
             QString candidatePath = sourceDir.absoluteFilePath(candidate);
+            qDebug() << candidatePath;
             if (QFile::exists(candidatePath)) {
                 imageData.originalJsonPath = candidatePath;
                 jsonFound = true;
@@ -2204,10 +2234,10 @@ bool StellinaProcessor::findStellinaImages() {
         }
         
         if (!jsonFound) {
-            jsonMissing++;
-            if (m_debugMode && jsonMissing <= 10) {
-                logMessage(QString("No JSON file found for %1").arg(fitsFile), "orange");
+            if (m_debugMode) {
+                logMessage(QString("No JSON metadata found for: %1").arg(fitsFile), "orange");
             }
+            jsonMissing++;
             continue;
         }
         
@@ -2217,13 +2247,13 @@ bool StellinaProcessor::findStellinaImages() {
             logMessage(QString("Failed to parse JSON for %1").arg(fitsFile), "red");
             continue;
         }
-        
+
         // Extract coordinates from JSON
         if (!extractCoordinates(imageData.metadata, imageData.altitude, imageData.azimuth)) {
-            logMessage(QString("No coordinates found in JSON for %1").arg(fitsFile), "red");
+            logMessage(QString("Failed to extract metadata from: %1").arg(imageData.originalJsonPath), "red");
             continue;
         }
-        
+
         imageData.hasValidCoordinates = true;
         
         // Extract FITS metadata
@@ -2236,32 +2266,151 @@ bool StellinaProcessor::findStellinaImages() {
         if (m_qualityFilter && !checkStellinaQuality(imageData.metadata)) {
             qualityRejected++;
             if (m_debugMode) {
-                logMessage(QString("Rejected %1: failed quality check").arg(fitsFile), "gray");
+                logMessage(QString("Rejected due to invalid coordinates: %1").arg(fitsFile), "orange");
             }
+            qualityRejected++;
             continue;
         }
         
-        // Add to processing lists
-        m_imagesToProcess.append(imageData.originalFitsPath);
         m_stellinaImageData.append(imageData);
+        m_imagesToProcess.append(imageData.originalFitsPath);
         validPairs++;
         
         if (m_debugMode) {
-            logMessage(QString("Added %1: Alt=%.2f°, Az=%.2f°, Exp=%2s, Temp=%3K")
+            QString typeInfo = imageData.isReversedImage ? " (REVERSED)" : "";
+            logMessage(QString("Added: %1 -> %2%3 (Bayer: %4)")
                           .arg(QFileInfo(fitsFile).fileName())
-                          .arg(imageData.altitude)
-                          .arg(imageData.azimuth)
-                          .arg(imageData.exposureSeconds)
-                          .arg(imageData.temperatureKelvin), "gray");
+                          .arg(QFileInfo(imageData.originalJsonPath).fileName())
+                          .arg(typeInfo)
+                          .arg(imageData.bayerPattern), "gray");
         }
     }
     
-    logMessage(QString("File pairing results: %1 valid pairs, %2 missing JSON, %3 quality rejected")
-                  .arg(validPairs).arg(jsonMissing).arg(qualityRejected), "blue");
+    logMessage(QString("Results: %1 valid pairs, %2 missing JSON, %3 quality rejected, %4 reversed images")
+                  .arg(validPairs).arg(jsonMissing).arg(qualityRejected).arg(reversedImages), "blue");
     
     return !m_stellinaImageData.isEmpty();
 }
 
+// Modified processImageDarkCalibration to handle bayer patterns
+bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
+    m_currentTaskLabel->setText("Dark calibration...");
+    
+    // Find the corresponding StellinaImageData
+    StellinaImageData imageData;
+    bool found = false;
+    
+    for (int i = 0; i < m_stellinaImageData.size(); ++i) {
+        if (m_stellinaImageData[i].currentFitsPath == lightFrame || 
+            m_stellinaImageData[i].originalFitsPath == lightFrame) {
+            imageData = m_stellinaImageData[i];
+            found = true;
+            break;
+        }
+    }
+    
+    if (!found) {
+        logMessage(QString("No metadata found for light frame: %1").arg(QFileInfo(lightFrame).fileName()), "red");
+        return false;
+    }
+    
+    // Log reversed image information
+    if (imageData.isReversedImage) {
+        logMessage(QString("Processing reversed stellina image: %1 (Bayer: %2)")
+                      .arg(QFileInfo(lightFrame).fileName())
+                      .arg(imageData.bayerPattern), "blue");
+    }
+    
+    // Use metadata from imageData
+    int lightExposure = imageData.exposureSeconds;
+    int lightTemperatureK = imageData.temperatureKelvin;
+    QString lightBinning = imageData.binning;
+    QString lightBayerPattern = imageData.bayerPattern;
+    
+    if (lightExposure <= 0) {
+        logMessage("Invalid exposure time in image metadata", "red");
+        return false;
+    }
+    
+    // Find matching dark frames with bayer pattern consideration
+    QStringList matchingDarks = findAllMatchingDarkFrames(lightExposure, lightTemperatureK, 
+                                                         lightBinning, lightBayerPattern);
+    
+    if (matchingDarks.isEmpty()) {
+        int temperatureC = lightTemperatureK - 273;
+        logMessage(QString("No matching dark frames found for exposure=%1s, temp=%2K (%3°C), binning=%4, bayer=%5")
+                      .arg(lightExposure).arg(lightTemperatureK).arg(temperatureC)
+                      .arg(lightBinning).arg(lightBayerPattern), "orange");
+        
+        // Still process with coordinate conversion even without dark calibration
+        if (!writeStellinaMetadataWithCoordinates(lightFrame, imageData)) {
+            logMessage("Failed to write metadata with coordinates to original FITS file", "red");
+        }
+        
+        m_skippedCount++;
+        return true;
+    }
+    
+    logMessage(QString("Found %1 matching dark frames (including rotated if needed)").arg(matchingDarks.size()), "blue");
+    
+    // Create master dark with bayer pattern in filename
+    QString masterDarkName = QString("master_dark_%1s_%2K_%3_%4.fits")
+                                .arg(lightExposure)
+                                .arg(lightTemperatureK)
+                                .arg(lightBinning)
+                                .arg(lightBayerPattern);
+    QString masterDarkPath = QDir(m_calibratedDirectory).absoluteFilePath(masterDarkName);
+    
+    if (!QFile::exists(masterDarkPath)) {
+        if (!createMasterDark(matchingDarks, masterDarkPath)) {
+            logMessage("Failed to create master dark", "red");
+            return false;
+        }
+        int temperatureC = lightTemperatureK - 273;
+        logMessage(QString("Created master dark: %1 (from %2K/%3°C data, %4 pattern)")
+                      .arg(masterDarkName).arg(lightTemperatureK).arg(temperatureC).arg(lightBayerPattern), "green");
+    } else {
+        logMessage(QString("Using existing master dark: %1").arg(masterDarkName), "blue");
+    }
+    
+    // Apply master dark
+    QString outputName = QString("dark_calibrated_%1.fits")
+                            .arg(QFileInfo(lightFrame).baseName());
+    QString outputPath = QDir(m_calibratedDirectory).absoluteFilePath(outputName);
+    
+    if (applyMasterDark(lightFrame, masterDarkPath, outputPath)) {
+        // Write metadata with coordinate conversion
+        StellinaImageData calibratedImageData = imageData;
+        calibratedImageData.currentFitsPath = outputPath;
+        
+        if (!writeStellinaMetadataWithCoordinates(outputPath, calibratedImageData)) {
+            logMessage("Warning: Failed to write metadata with coordinates to calibrated FITS file", "orange");
+        } else {
+            updateProcessingStage(outputPath, "DARK_CALIBRATED_WITH_COORDS");
+            logMessage(QString("Wrote dark-calibrated file with RA/DEC coordinates: %1").arg(QFileInfo(outputPath).fileName()), "green");
+        }
+        
+        // Update tracking data
+        for (int i = 0; i < m_stellinaImageData.size(); ++i) {
+            if (m_stellinaImageData[i].originalFitsPath == imageData.originalFitsPath) {
+                m_stellinaImageData[i].currentFitsPath = outputPath;
+                break;
+            }
+        }
+        
+        m_darkCalibratedFiles.append(outputPath);
+        m_darkCalibratedCount++;
+        
+        QString reversedInfo = imageData.isReversedImage ? " (reversed image)" : "";
+        logMessage(QString("Dark calibration with coordinate conversion successful: %1%2")
+                      .arg(outputName).arg(reversedInfo), "green");
+        return true;
+    } else {
+        logMessage("Dark calibration failed", "red");
+        return false;
+    }
+}
+    
 // Helper function to clean existing Stellina keywords
 bool StellinaProcessor::cleanExistingStellinaKeywords(const QString &fitsPath) {
     fitsfile *fptr = nullptr;
@@ -2543,112 +2692,6 @@ bool StellinaProcessor::readStellinaMetadataFromFits(const QString &fitsPath, St
     }
     
     return true;
-}
-
-// Modified processImageDarkCalibration function
-bool StellinaProcessor::processImageDarkCalibration(const QString &lightFrame) {
-    m_currentTaskLabel->setText("Dark calibration...");
-    
-    // Find the corresponding StellinaImageData
-    StellinaImageData imageData;
-    bool found = false;
-    
-    for (int i = 0; i < m_stellinaImageData.size(); ++i) {
-        if (m_stellinaImageData[i].currentFitsPath == lightFrame || 
-            m_stellinaImageData[i].originalFitsPath == lightFrame) {
-            imageData = m_stellinaImageData[i];
-            found = true;
-            break;
-        }
-    }
-    
-    if (!found) {
-        logMessage(QString("No metadata found for light frame: %1").arg(QFileInfo(lightFrame).fileName()), "red");
-        return false;
-    }
-    
-    // Use metadata from imageData instead of extracting again
-    int lightExposure = imageData.exposureSeconds;
-    int lightTemperatureK = imageData.temperatureKelvin;
-    QString lightBinning = imageData.binning;
-    
-    if (lightExposure <= 0) {
-        logMessage("Invalid exposure time in image metadata", "red");
-        return false;
-    }
-    
-    // Find matching dark frames
-    QStringList matchingDarks = findAllMatchingDarkFrames(lightExposure, lightTemperatureK, lightBinning);
-    
-    if (matchingDarks.isEmpty()) {
-        int temperatureC = lightTemperatureK - 273;
-        logMessage(QString("No matching dark frames found for exposure=%1s, temp=%2K (%3°C), binning=%4")
-                      .arg(lightExposure).arg(lightTemperatureK).arg(temperatureC).arg(lightBinning), "orange");
-        
-        // IMPORTANT: Even without dark calibration, write metadata WITH coordinate conversion
-        if (!writeStellinaMetadataWithCoordinates(lightFrame, imageData)) {
-            logMessage("Failed to write metadata with coordinates to original FITS file", "red");
-        }
-        
-        m_skippedCount++;
-        return true; // Continue processing without dark calibration
-    }
-    
-    logMessage(QString("Found %1 matching dark frames").arg(matchingDarks.size()), "blue");
-    
-    // Create master dark
-    QString masterDarkName = QString("master_dark_%1s_%2K_%3.fits")
-                                .arg(lightExposure)
-                                .arg(lightTemperatureK)
-                                .arg(lightBinning);
-    QString masterDarkPath = QDir(m_calibratedDirectory).absoluteFilePath(masterDarkName);
-    
-    if (!QFile::exists(masterDarkPath)) {
-        if (!createMasterDark(matchingDarks, masterDarkPath)) {
-            logMessage("Failed to create master dark", "red");
-            return false;
-        }
-        int temperatureC = lightTemperatureK - 273;
-        logMessage(QString("Created master dark: %1 (from %2K/%3°C data)")
-                      .arg(masterDarkName).arg(lightTemperatureK).arg(temperatureC), "green");
-    } else {
-        logMessage(QString("Using existing master dark: %1").arg(masterDarkName), "blue");
-    }
-    
-    // Apply master dark
-    QString outputName = QString("dark_calibrated_%1.fits")
-                            .arg(QFileInfo(lightFrame).baseName());
-    QString outputPath = QDir(m_calibratedDirectory).absoluteFilePath(outputName);
-    
-    if (applyMasterDark(lightFrame, masterDarkPath, outputPath)) {
-        // IMPORTANT: Write Stellina metadata WITH coordinate conversion to the calibrated file
-        StellinaImageData calibratedImageData = imageData;
-        calibratedImageData.currentFitsPath = outputPath;
-        
-        if (!writeStellinaMetadataWithCoordinates(outputPath, calibratedImageData)) {
-            logMessage("Warning: Failed to write metadata with coordinates to calibrated FITS file", "orange");
-        } else {
-            // Update processing stage in the metadata
-            updateProcessingStage(outputPath, "DARK_CALIBRATED_WITH_COORDS");
-            logMessage(QString("Wrote dark-calibrated file with RA/DEC coordinates: %1").arg(QFileInfo(outputPath).fileName()), "green");
-        }
-        
-        // Update the tracking data structure
-        for (int i = 0; i < m_stellinaImageData.size(); ++i) {
-            if (m_stellinaImageData[i].originalFitsPath == imageData.originalFitsPath) {
-                m_stellinaImageData[i].currentFitsPath = outputPath;
-                break;
-            }
-        }
-        
-        m_darkCalibratedFiles.append(outputPath);
-        m_darkCalibratedCount++;
-        logMessage(QString("Dark calibration with coordinate conversion successful: %1").arg(outputName), "green");
-        return true;
-    } else {
-        logMessage("Dark calibration failed", "red");
-        return false;
-    }
 }
 
 // Helper function to find image data by file path

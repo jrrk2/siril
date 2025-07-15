@@ -46,6 +46,7 @@ SOURCES += \
     StellinaProcessor_Processing.cpp \
     StellinaProcessor_Slots.cpp \
     StellinaProcessor_UI.cpp \
+    StellinaProcessor_Utils.cpp \
     StellinaProcessor_WCS_Integration.cpp \
     WcsAstrometricStacker.cpp \
     

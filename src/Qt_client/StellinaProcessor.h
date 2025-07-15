@@ -84,6 +84,10 @@ struct DarkFrame {
     int exposure;     // exposure time in seconds
     int temperature;  // sensor temperature in degrees C
     QString binning;  // binning mode (e.g., "1x1", "2x2")
+    QString bayerPattern;      // NEW: bayer pattern for this dark frame
+    
+    DarkFrame() : exposure(0), temperature(0), bayerPattern("RGGB") {}
+
 };
 
 // Update the StellinaImageData structure
@@ -105,9 +109,14 @@ struct StellinaImageData {
     double calculatedDec;         // Calculated Dec from Alt/Az conversion (degrees)
     bool hasCalculatedCoords;     // Whether calculated coordinates are available
     
+    // NEW: Reversed image support
+    bool isReversedImage;         // True if this is a reversed stellina image (img-0001r.fits)
+    QString bayerPattern;         // Detected bayer pattern (e.g., "RGGB", "GRBG", "GBRG", "BGGR")
+    QString baseName;             // Base name without 'r' suffix (e.g., "img-0001")
+    
     StellinaImageData() : altitude(0), azimuth(0), hasValidCoordinates(false), 
                          exposureSeconds(0), temperatureKelvin(284), binning("1x1"),
-                         calculatedRA(0), calculatedDec(0), hasCalculatedCoords(false) {}
+			  calculatedRA(0), calculatedDec(0), hasCalculatedCoords(false), isReversedImage(false), bayerPattern("RGGB")  {}
     
     // Convenience function to check if pre-calculated coordinates are available
     bool hasPreCalculatedCoords() const {
@@ -275,7 +284,42 @@ private:
     void altAzToRaDec_Standard(double alt, double az, double lat, double lst, double &ra, double &dec);
     void altAzToRaDec_StellinaFixed(double alt, double az, double lat, double lst, double &ra, double &dec);
     void testAllCoordinateVariations();
-
+    // NEW: Reversed image support methods
+    bool isReversedStellinaImage(const QString &filename);
+    QString detectBayerPattern(const QString &fitsPath);
+    QString getBaseName(const QString &filename);
+    bool needsDarkRotation(const QString &lightBayerPattern, const QString &darkBayerPattern);
+    bool rotateDarkFrame(const QString &inputDarkPath, const QString &outputDarkPath, 
+                        const QString &fromPattern, const QString &toPattern);
+    QPoint getBayerPatternOffset(const QString &pattern);
+    QString getMatchingDarkKey(const StellinaImageData &imageData);
+  QString getRotationMethodDescription(const QString &fromPattern, const QString &toPattern);
+  bool performBayerPatternRotation(const std::vector<float> &inputData, 
+                                                   std::vector<float> &outputData,
+                                                   long width, long height,
+                                                   const QString &fromPattern, 
+						      const QString &toPattern) ;
+  int getBayerRotationType(const QString &fromPattern, const QString &toPattern) ;
+  bool rotateBayerImage180(const std::vector<float> &inputData, 
+                                           std::vector<float> &outputData,
+					      long width, long height);
+  bool rotateBayerImage90CW(const std::vector<float> &inputData, 
+                                            std::vector<float> &outputData,
+					       long width, long height) ;
+  bool rotateBayerImage270CW(const std::vector<float> &inputData, 
+                                             std::vector<float> &outputData,
+						long width, long height);
+  bool flipBayerImageHorizontal(const std::vector<float> &inputData, 
+                                                std::vector<float> &outputData,
+						   long width, long height);
+  bool flipBayerImageVertical(const std::vector<float> &inputData, 
+                                              std::vector<float> &outputData,
+						 long width, long height);
+  QStringList findAllMatchingDarkFrames(int targetExposure, int targetTemperature, 
+                                                        const QString &targetBinning, 
+							   const QString &targetBayerPattern);
+  void loadDarkFrames() ;
+  
     // Mount tilt correction functions
     void applyMountTiltCorrection(double &alt, double &az, double inputAlt, double inputAz);
     void calibrateMountTilt();
