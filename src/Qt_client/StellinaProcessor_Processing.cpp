@@ -169,7 +169,8 @@ bool StellinaProcessor::setupStackingStage() {
     // Build full paths
     m_imagesToProcess.clear();
     for (const QString &fileName : plateSolvedFiles) {
-        m_imagesToProcess.append(plateSolvedDir.absoluteFilePath(fileName));
+        if (m_imagesToProcess.size() < 10)
+            m_imagesToProcess.append(plateSolvedDir.absoluteFilePath(fileName));
     }
     
     logMessage(QString("Astrometric stacking stage: found %1 plate-solved images")

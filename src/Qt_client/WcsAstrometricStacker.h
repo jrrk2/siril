@@ -118,7 +118,8 @@ private:
     bool computeImageQualityScore(WCSImageData &img_data);
     bool addPlatesolveDFITSFile(const QString &solved_fits_file);
     bool addImageFromStellinaData(const QString &fits_file, const StellinaImageData &stellina_data);
-    
+    void saveOverlapMap(const cv::Mat& overlap_count, const QString& output_path);
+    void analyzeOverlapDistribution(const cv::Mat& overlap_count);  
     // Utility functions
     void updateProgress(int percentage, const QString &message);
     void logProcessing(const QString &message);

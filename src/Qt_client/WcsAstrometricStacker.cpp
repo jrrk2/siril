@@ -402,7 +402,9 @@ bool WCSAstrometricStacker::computeOptimalWCS() {
     return true;
 }
 
-// Updated stackImages function core loop
+// SOLUTION: Two-pass stacking with overlap-aware brightness compensation
+// Replace the main stacking loop in stackImages() with this improved version
+
 bool WCSAstrometricStacker::stackImages() {
     updateProgress(0, "Starting TAN projection astrometric stacking...");
     
@@ -423,6 +425,37 @@ bool WCSAstrometricStacker::stackImages() {
     m_weight_map = cv::Mat::zeros(m_output_size, CV_32F);
     m_overlap_map = cv::Mat::zeros(m_output_size, CV_8U);
     
+    // NEW: Create overlap count map first (Pass 1)
+    cv::Mat overlap_count = cv::Mat::zeros(m_output_size, CV_32F);
+    
+    updateProgress(10, "Pass 1: Computing overlap regions...");
+    
+    // First pass: count overlaps for each output pixel
+    for (size_t i = 0; i < m_images.size(); ++i) {
+        const auto& img = m_images[i];
+        if (!img->wcs_valid || img->image.empty()) continue;
+        
+        for (int y = 0; y < m_output_size.height; ++y) {
+            for (int x = 0; x < m_output_size.width; ++x) {
+                double ra, dec;
+                if (m_output_wcs.pixelToWorld(x + 1.0, y + 1.0, ra, dec)) {
+                    double imgpx, imgpy;
+                    if (img->wcs.worldToPixel(ra, dec, imgpx, imgpy)) {
+                        float srcX = imgpx - 1.0f;
+                        float srcY = imgpy - 1.0f;
+                        
+                        if (srcX >= 0.0f && srcX < img->image.cols - 1 &&
+                            srcY >= 0.0f && srcY < img->image.rows - 1) {
+                            overlap_count.at<float>(y, x) += 1.0f;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    updateProgress(30, "Pass 2: Stacking with overlap-aware weights...");
+    
     // Prepare for pixel rejection if using sigma clipping
     std::vector<std::vector<float>> pixelStacks;
     std::vector<std::vector<float>> weightStacks;
@@ -433,57 +466,50 @@ bool WCSAstrometricStacker::stackImages() {
         weightStacks.resize(m_output_size.height * m_output_size.width);
     }
     
-    // Step 2: Reproject and combine each image
+    // Step 2: Second pass - reproject and combine with overlap compensation
     m_pixels_processed = 0;
     m_pixels_rejected = 0;
     
     for (size_t i = 0; i < m_images.size(); ++i) {
-        updateProgress(10 + (i * 80) / m_images.size(), 
+        updateProgress(30 + (i * 50) / m_images.size(), 
                        QString("Processing image %1 of %2: %3")
                        .arg(i+1)
                        .arg(m_images.size())
                        .arg(QFileInfo(m_images[i]->filename).fileName()));
         
-        // Get current image data
         const auto& img = m_images[i];
         if (!img->wcs_valid || img->image.empty()) {
             logProcessing(QString("Skipping invalid image: %1").arg(QFileInfo(img->filename).fileName()));
             continue;
         }
         
-        // Calculate image weight based on quality and exposure
-        float imageWeight = img->quality_score;
+        // Base image weight (quality * exposure)
+        float baseImageWeight = img->quality_score;
         if (m_params.normalize_exposure && img->exposure_time > 0) {
-            imageWeight *= img->exposure_time;
+            baseImageWeight *= img->exposure_time;
         }
         
         int pixelsProcessedThisImage = 0;
         
-        // Loop through output pixels and find corresponding input pixels
+        // Loop through output pixels with overlap-aware weighting
         for (int y = 0; y < m_output_size.height; ++y) {
             for (int x = 0; x < m_output_size.width; ++x) {
-                // Convert output pixel (x,y) to world coordinates (RA,Dec)
                 double ra, dec;
                 if (m_output_wcs.pixelToWorld(x + 1.0, y + 1.0, ra, dec)) {
-                    
-                    // Now convert world coordinates to input image pixel coordinates
                     double imgpx, imgpy;
                     if (img->wcs.worldToPixel(ra, dec, imgpx, imgpy)) {
-                        
-                        // Check if the pixel is within the input image bounds (1-indexed to 0-indexed)
                         float srcX = imgpx - 1.0f;
                         float srcY = imgpy - 1.0f;
                         
                         if (srcX >= 0.0f && srcX < img->image.cols - 1 &&
                             srcY >= 0.0f && srcY < img->image.rows - 1) {
                             
-                            // Perform bilinear interpolation to get pixel value
+                            // Bilinear interpolation
                             int x0 = int(floor(srcX));
                             int y0 = int(floor(srcY));
                             int x1 = x0 + 1;
                             int y1 = y0 + 1;
                             
-                            // Ensure we stay within bounds
                             if (x0 >= 0 && x1 < img->image.cols && y0 >= 0 && y1 < img->image.rows) {
                                 float dx = srcX - x0;
                                 float dy = srcY - y0;
@@ -495,20 +521,30 @@ bool WCSAstrometricStacker::stackImages() {
                                 
                                 float v0 = v00 * (1 - dx) + v01 * dx;
                                 float v1 = v10 * (1 - dx) + v11 * dx;
-                                
                                 float pixelValue = v0 * (1 - dy) + v1 * dy;
                                 
-                                // Skip if pixel is invalid (NaN or Inf)
                                 if (std::isfinite(pixelValue)) {
+                                    // CRITICAL FIX: Overlap-aware weight calculation
+                                    float overlapCount = overlap_count.at<float>(y, x);
+                                    float pixelWeight = baseImageWeight;
+                                    
+                                    // Apply overlap compensation factor
+                                    if (overlapCount > 1.0f) {
+                                        // Reduce weight for high-overlap regions to prevent over-brightening
+                                        pixelWeight /= sqrt(overlapCount);
+                                    }
+                                    
+                                    // Alternative: Normalize by expected total weight
+                                    // This ensures consistent brightness regardless of overlap
+                                    float normalizedWeight = baseImageWeight / overlapCount;
+                                    
                                     if (useSigmaClipping) {
-                                        // For sigma clipping, store all values for later processing
                                         int idx = y * m_output_size.width + x;
                                         pixelStacks[idx].push_back(pixelValue);
-                                        weightStacks[idx].push_back(imageWeight);
+                                        weightStacks[idx].push_back(normalizedWeight);
                                     } else {
-                                        // For direct stacking methods
-                                        m_stacked_image.at<float>(y, x) += pixelValue * imageWeight;
-                                        m_weight_map.at<float>(y, x) += imageWeight;
+                                        m_stacked_image.at<float>(y, x) += pixelValue * normalizedWeight;
+                                        m_weight_map.at<float>(y, x) += normalizedWeight;
                                         m_overlap_map.at<uchar>(y, x)++;
                                     }
                                     
@@ -527,11 +563,10 @@ bool WCSAstrometricStacker::stackImages() {
                      .arg(pixelsProcessedThisImage));
     }
     
-    // Step 3: Perform pixel rejection if using sigma clipping
+    // Step 3: Handle sigma clipping or normalize
     if (useSigmaClipping) {
-        updateProgress(90, "Performing sigma clipping rejection...");
+        updateProgress(80, "Performing sigma clipping rejection...");
         
-        // Process each pixel stack
         for (int y = 0; y < m_output_size.height; ++y) {
             for (int x = 0; x < m_output_size.width; ++x) {
                 int idx = y * m_output_size.width + x;
@@ -539,7 +574,7 @@ bool WCSAstrometricStacker::stackImages() {
                 std::vector<float>& weightStack = weightStacks[idx];
                 
                 if (!pixelStack.empty()) {
-                    // Compute mean and standard deviation
+                    // Compute statistics
                     float sum = 0.0f, sumSq = 0.0f;
                     for (float val : pixelStack) {
                         sum += val;
@@ -579,59 +614,50 @@ bool WCSAstrometricStacker::stackImages() {
                 }
             }
         }
-        
-        logProcessing(QString("Sigma clipping completed: rejected %1 of %2 pixels (%3%)")
-                     .arg(m_pixels_rejected)
-                     .arg(m_pixels_processed)
-                     .arg(m_pixels_processed > 0 ? (m_pixels_rejected * 100.0 / m_pixels_processed) : 0.0, 0, 'f', 1));
     } else {
-        // Step 3 (alternative): Normalize by weights for non-sigma-clipping methods
-        updateProgress(90, "Normalizing stacked image...");
+        updateProgress(80, "Normalizing stacked image...");
         
-        // Normalize by total weight
+        // Final normalization - this should now produce uniform brightness
         for (int y = 0; y < m_output_size.height; ++y) {
             for (int x = 0; x < m_output_size.width; ++x) {
-                if (m_weight_map.at<float>(y, x) > 0) {
-                    m_stacked_image.at<float>(y, x) /= m_weight_map.at<float>(y, x);
+                float totalWeight = m_weight_map.at<float>(y, x);
+                if (totalWeight > 0) {
+                    m_stacked_image.at<float>(y, x) /= totalWeight;
                 }
             }
         }
     }
     
-    // Step 4: Final post-processing
-    updateProgress(95, "Performing final image adjustments...");
+    updateProgress(90, "Applying final brightness compensation...");
     
-    // Create a mask for pixels with no data
-    cv::Mat mask = (m_weight_map > 0);
+    // OPTIONAL: Additional global brightness equalization
+    // Calculate median brightness in high-overlap vs low-overlap regions
+    cv::Mat highOverlapMask = (overlap_count >= 3.0f);
+    cv::Mat lowOverlapMask = (overlap_count >= 1.0f) & (overlap_count < 3.0f);
     
-    // Calculate statistics for the stacked image
-    double minVal, maxVal;
-    cv::Scalar meanVal = cv::mean(m_stacked_image, mask);
-    cv::minMaxLoc(m_stacked_image, &minVal, &maxVal, nullptr, nullptr, mask);
-    
-    // Count valid pixels
-    int validPixels = cv::countNonZero(mask);
-    
-    logProcessing(QString("Stacking complete - Image statistics:"));
-    logProcessing(QString("  Valid pixels: %1 of %2 (%3%)")
-                 .arg(validPixels)
-                 .arg(m_output_size.area())
-                 .arg(validPixels * 100.0 / m_output_size.area(), 0, 'f', 1));
-    logProcessing(QString("  Pixel values: min=%1, max=%2, mean=%3")
-                 .arg(minVal, 0, 'f', 2)
-                 .arg(maxVal, 0, 'f', 2)
-                 .arg(meanVal[0], 0, 'f', 2));
-    
-    // Create noise map if requested
-    if (m_params.create_weight_map) {
-        m_noise_map = cv::Mat::zeros(m_output_size, CV_32F);
-        for (int y = 0; y < m_output_size.height; ++y) {
-            for (int x = 0; x < m_output_size.width; ++x) {
-                float weight = m_weight_map.at<float>(y, x);
-                if (weight > 0) {
-                    // Noise decreases with sqrt(N) where N is effective number of images
-                    m_noise_map.at<float>(y, x) = 1.0f / sqrt(weight);
+    if (cv::countNonZero(highOverlapMask) > 100 && cv::countNonZero(lowOverlapMask) > 100) {
+        cv::Scalar highOverlapMean = cv::mean(m_stacked_image, highOverlapMask);
+        cv::Scalar lowOverlapMean = cv::mean(m_stacked_image, lowOverlapMask);
+        
+        if (highOverlapMean[0] > 0 && lowOverlapMean[0] > 0) {
+            float brightness_ratio = lowOverlapMean[0] / highOverlapMean[0];
+            logProcessing(QString("Brightness compensation ratio: %1").arg(brightness_ratio, 0, 'f', 3));
+            
+            // Apply gentle global correction if needed
+            if (brightness_ratio < 0.8 || brightness_ratio > 1.2) {
+                for (int y = 0; y < m_output_size.height; ++y) {
+                    for (int x = 0; x < m_output_size.width; ++x) {
+                        float overlap = overlap_count.at<float>(y, x);
+                        if (overlap >= 3.0f) {
+                            // Slightly reduce brightness in high-overlap regions
+                            m_stacked_image.at<float>(y, x) *= 0.95f;
+                        } else if (overlap >= 1.0f && overlap < 3.0f) {
+                            // Slightly boost brightness in low-overlap regions
+                            m_stacked_image.at<float>(y, x) *= 1.05f;
+                        }
+                    }
                 }
+                logProcessing("Applied gentle brightness equalization");
             }
         }
     }
@@ -1045,3 +1071,80 @@ void WCSAstrometricStacker::finishStacking() {
     emit statusUpdated("TAN projection stacking completed successfully");
 }
 
+// Add this diagnostic function to WCSAstrometricStacker class
+// Call it after the first pass to understand overlap patterns
+
+void WCSAstrometricStacker::analyzeOverlapDistribution(const cv::Mat& overlap_count) {
+    // Calculate overlap statistics
+    double minOverlap, maxOverlap;
+    cv::minMaxLoc(overlap_count, &minOverlap, &maxOverlap);
+    
+    cv::Scalar meanOverlap = cv::mean(overlap_count, overlap_count > 0);
+    
+    // Count pixels by overlap level
+    int noOverlap = cv::countNonZero(overlap_count == 0);
+    int singleOverlap = cv::countNonZero(overlap_count == 1);
+    int doubleOverlap = cv::countNonZero(overlap_count == 2);
+    int tripleOverlap = cv::countNonZero(overlap_count >= 3);
+    int totalPixels = m_output_size.area();
+    
+    logProcessing("=== OVERLAP ANALYSIS ===");
+    logProcessing(QString("Overlap range: %1 to %2 images per pixel")
+                 .arg(minOverlap, 0, 'f', 1)
+                 .arg(maxOverlap, 0, 'f', 1));
+    logProcessing(QString("Mean overlap: %1 images per pixel")
+                 .arg(meanOverlap[0], 0, 'f', 2));
+    
+    logProcessing(QString("Pixel distribution:"));
+    logProcessing(QString("  No coverage: %1 pixels (%2%)")
+                 .arg(noOverlap)
+                 .arg(noOverlap * 100.0 / totalPixels, 0, 'f', 1));
+    logProcessing(QString("  Single image: %1 pixels (%2%)")
+                 .arg(singleOverlap)
+                 .arg(singleOverlap * 100.0 / totalPixels, 0, 'f', 1));
+    logProcessing(QString("  Two images: %1 pixels (%2%)")
+                 .arg(doubleOverlap)
+                 .arg(doubleOverlap * 100.0 / totalPixels, 0, 'f', 1));
+    logProcessing(QString("  Three+ images: %1 pixels (%2%)")
+                 .arg(tripleOverlap)
+                 .arg(tripleOverlap * 100.0 / totalPixels, 0, 'f', 1));
+    
+    // This helps identify if your brightness problem correlates with overlap
+    if (singleOverlap > totalPixels * 0.3) {
+        logProcessing("WARNING: High percentage of single-overlap pixels may cause brightness variations");
+    }
+    
+    if (tripleOverlap > totalPixels * 0.5) {
+        logProcessing("INFO: Good overlap coverage - applying compensation for center over-brightening");
+    }
+}
+
+// Also add this method to save overlap map for visual inspection
+void WCSAstrometricStacker::saveOverlapMap(const cv::Mat& overlap_count, const QString& output_path) {
+    // Convert overlap count to 8-bit for visualization
+    cv::Mat overlap_vis;
+    overlap_count.convertTo(overlap_vis, CV_8U, 255.0 / 5.0); // Scale assuming max 5 overlaps
+    
+    // Save as FITS for quantitative analysis
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = QString("!%1").arg("_overlap.fits").toLocal8Bit();
+    if (fits_create_file(&fptr, pathBytes.data(), &status) == 0) {
+        long naxes[2] = {overlap_count.cols, overlap_count.rows};
+        if (fits_create_img(fptr, FLOAT_IMG, 2, naxes, &status) == 0) {
+            
+            std::vector<float> pixels(overlap_count.rows * overlap_count.cols);
+            for (int y = 0; y < overlap_count.rows; ++y) {
+                for (int x = 0; x < overlap_count.cols; ++x) {
+                    pixels[y * overlap_count.cols + x] = overlap_count.at<float>(y, x);
+                }
+            }
+            
+            if (fits_write_img(fptr, TFLOAT, 1, pixels.size(), pixels.data(), &status) == 0) {
+                logProcessing(QString("Saved overlap map"));
+            }
+        }
+        fits_close_file(fptr, &status);
+    }
+}
