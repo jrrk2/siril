@@ -230,7 +230,7 @@ void StellinaProcessor::setupBasicTab() {
     advancedLayout->addWidget(m_stackingStatusLabel, 0, 2);
     
     // Add all groups to main layout
-    layout->addWidget(m_connectionGroup);
+//    layout->addWidget(m_connectionGroup);
     layout->addWidget(m_modeGroup);
     layout->addWidget(m_inputGroup);
     layout->addWidget(m_basicOptionsGroup);

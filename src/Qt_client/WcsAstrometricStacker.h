@@ -43,7 +43,8 @@ struct WCSImageData {
     WCSImageData() : quality_score(1.0), exposure_time(10.0), star_count(0),
                     background_level(0.0), noise_level(0.0), wcs_valid(false),
                     stellina_correction_magnitude(0.0), stellina_stars_used(0) {
-        wcsini(1, 2, &wcs);  // Initialize WCS structure
+        // wcsini(1, 2, &wcs);  // Initialize WCS structure
+						memset(&wcs, 0, sizeof(wcs));
     }
     
     ~WCSImageData() {
@@ -104,15 +105,15 @@ private:
     bool loadWCSFromFITS(const QString &fits_file, WCSImageData &img_data);
     bool extractImageStatistics(WCSImageData &img_data);
     bool computeImageQualityScore(WCSImageData &img_data);
+    bool addPlatesolveDFITSFile(const QString &solved_fits_file);
+    bool addImageFromStellinaData(const QString &fits_file, const StellinaImageData &stellina_data);
     
     // Utility functions
     void updateProgress(int percentage, const QString &message);
     void logProcessing(const QString &message);
     void finishStacking();
-	bool addImageFromStellinaData(const QString &fits_file,
-														 const StellinaImageData &stellina_data);
-	bool addPlatesolveDFITSFile(const QString &solved_fits_file);
-	// Member variables
+    
+    // Member variables
     std::vector<std::unique_ptr<WCSImageData>> m_images;
     struct wcsprm m_output_wcs;       // Target WCS for output
     cv::Size m_output_size;           // Output image dimensions

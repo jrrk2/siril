@@ -52,6 +52,7 @@ SOURCES += \
 # Header files
 HEADERS += \
     StellinaProcessor.h \
+    WcsAstrometricStacker.h \
 
 # Resources (if you add icons, etc.)
 # RESOURCES += resources.qrc

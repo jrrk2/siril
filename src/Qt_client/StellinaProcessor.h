@@ -357,7 +357,7 @@ private:
     QWidget *m_logTab;
     
     // Connection group
-    QGroupBox *m_connectionGroup;
+//    QGroupBox *m_connectionGroup;
     QPushButton *m_testConnectionButton;
     QLabel *m_connectionStatus;
     

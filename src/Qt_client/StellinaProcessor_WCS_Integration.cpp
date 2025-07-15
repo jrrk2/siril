@@ -519,7 +519,7 @@ void StellinaProcessor::addWCSMenuItems() {
 void StellinaProcessor::updateWCSUI() {
     bool hasPlatesolved = !m_plateSolvedDirectory.isEmpty() && 
                          QDir(m_plateSolvedDirectory).exists();
-    bool hasWCSResult = !m_wcsStacker->getStackedImage().empty();
+    bool hasWCSResult = false; // !m_wcsStacker->getStackedImage().empty();
     
     if (m_startWCSStackingButton) {
         m_startWCSStackingButton->setEnabled(hasPlatesolved && !m_processing);

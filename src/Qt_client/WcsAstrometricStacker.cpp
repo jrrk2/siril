@@ -20,9 +20,11 @@ WCSAstrometricStacker::WCSAstrometricStacker(QObject *parent)
     , m_processing_timer(new QTimer(this))
     , m_total_processing_time(0.0)
     , m_pixels_processed(0)
+    , m_stacked_image()
     , m_pixels_rejected(0)
 {
-    wcsini(1, 2, &m_output_wcs);
+    // wcsini(1, 2, &m_output_wcs);
+    memset(&m_output_wcs, 0, sizeof(m_output_wcs));
     
     // Set up processing timer for non-blocking operation
     m_processing_timer->setSingleShot(true);
@@ -31,6 +33,16 @@ WCSAstrometricStacker::WCSAstrometricStacker(QObject *parent)
 
 WCSAstrometricStacker::~WCSAstrometricStacker() {
     wcsfree(&m_output_wcs);
+}
+
+bool WCSAstrometricStacker::addImage(const QString &fits_file, const QString &solved_fits_file) {
+    // Use the solved_fits_file if provided, otherwise use the fits_file
+    QString fileToUse = solved_fits_file.isEmpty() ? fits_file : solved_fits_file;
+    return addPlatesolveDFITSFile(fileToUse);
+}
+
+bool WCSAstrometricStacker::addImageWithMetadata(const QString &fits_file, const StellinaImageData &stellina_data) {
+    return addImageFromStellinaData(fits_file, stellina_data);
 }
 
 bool WCSAstrometricStacker::addPlatesolveDFITSFile(const QString &solved_fits_file) {
@@ -131,44 +143,92 @@ bool WCSAstrometricStacker::loadWCSFromFITS(const QString &fits_file, WCSImageDa
     
     QByteArray pathBytes = fits_file.toLocal8Bit();
     if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
+        emit errorOccurred(QString("Failed to open FITS file: %1 (status: %2)").arg(fits_file).arg(status));
         return false;
     }
     
     img_data.filename = fits_file;
     img_data.solved_filename = fits_file;
     
-    // Read WCS header
-    char *header = nullptr;
+    // First, get the number of header keywords properly
     int nkeys = 0;
-    if (fits_hdr2str(fptr, 1, nullptr, 0, &header, &nkeys, &status)) {
+    if (fits_get_hdrspace(fptr, &nkeys, nullptr, &status)) {
+        emit errorOccurred(QString("Failed to get header space: %1 (status: %2)").arg(fits_file).arg(status));
         fits_close_file(fptr, &status);
         return false;
     }
     
-    // Parse WCS
+    if (nkeys == 0) {
+        emit errorOccurred(QString("FITS file has no header keywords: %1").arg(fits_file));
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    // Read WCS header with proper parameters
+    char *header = nullptr;
+    int nkeysret = 0;
+    
+    // Use fits_hdr2str with correct parameters:
+    // - excludecomm = 1 (exclude comment and history)
+    // - nkeywords = 0 (return all keywords)
+    if (fits_hdr2str(fptr, 1, nullptr, 0, &header, &nkeysret, &status)) {
+        emit errorOccurred(QString("Failed to read FITS header: %1 (status: %2)").arg(fits_file).arg(status));
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    if (!header || nkeysret == 0) {
+        emit errorOccurred(QString("Empty FITS header returned: %1 (nkeys: %2)").arg(fits_file).arg(nkeysret));
+        if (header) free(header);
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    // Debug output to understand what we got
+    logProcessing(QString("FITS header read: %1 keywords from %2").arg(nkeysret).arg(QFileInfo(fits_file).fileName()));
+    
+    // Parse WCS using wcspih
     int nreject = 0, nwcs = 0;
     struct wcsprm *wcs = nullptr;
-    if (wcspih(header, nkeys, WCSHDR_all, 2, &nreject, &nwcs, &wcs) || nwcs == 0) {
+    
+    // Use wcspih to parse WCS from header string
+    int wcspih_status = wcspih(header, nkeysret, WCSHDR_all, 2, &nreject, &nwcs, &wcs);
+    
+    if (wcspih_status) {
+        emit errorOccurred(QString("WCS parsing failed: %1 (wcspih status: %2, nwcs: %3, nreject: %4)")
+                          .arg(fits_file).arg(wcspih_status).arg(nwcs).arg(nreject));
         free(header);
         fits_close_file(fptr, &status);
         return false;
     }
     
+    if (nwcs == 0) {
+        emit errorOccurred(QString("No WCS found in FITS file: %1 (rejected: %2)").arg(fits_file).arg(nreject));
+        free(header);
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    // Copy the first WCS structure
     img_data.wcs = wcs[0];
     if (wcsset(&img_data.wcs)) {
+        emit errorOccurred(QString("WCS setup failed: %1").arg(fits_file));
         free(header);
-        free(wcs);
+        wcsvfree(&nwcs, &wcs);
         fits_close_file(fptr, &status);
         return false;
     }
     
     img_data.wcs_valid = true;
+    
+    // Clean up WCS memory
+    wcsvfree(&nwcs, &wcs);
     free(header);
-    free(wcs);
     
     // Read image dimensions and data
     long naxes[2];
     if (fits_get_img_size(fptr, 2, naxes, &status)) {
+        emit errorOccurred(QString("Failed to get image size: %1 (status: %2)").arg(fits_file).arg(status));
         fits_close_file(fptr, &status);
         return false;
     }
@@ -177,6 +237,7 @@ bool WCSAstrometricStacker::loadWCSFromFITS(const QString &fits_file, WCSImageDa
     std::vector<float> pixels(totalPixels);
     
     if (fits_read_img(fptr, TFLOAT, 1, totalPixels, nullptr, pixels.data(), nullptr, &status)) {
+        emit errorOccurred(QString("Failed to read image data: %1 (status: %2)").arg(fits_file).arg(status));
         fits_close_file(fptr, &status);
         return false;
     }
@@ -185,6 +246,8 @@ bool WCSAstrometricStacker::loadWCSFromFITS(const QString &fits_file, WCSImageDa
     img_data.image = cv::Mat(naxes[1], naxes[0], CV_32F, pixels.data()).clone();
     
     fits_close_file(fptr, &status);
+    
+    logProcessing(QString("Successfully loaded WCS and image data from: %1").arg(QFileInfo(fits_file).fileName()));
     return (status == 0);
 }
 
@@ -458,4 +521,4 @@ void WCSAstrometricStacker::finishStacking() {
     emit statusUpdated("Stacking completed successfully");
 }
 
-// #include "WcsAstrometricStacker.moc"
+// MOC file will be automatically generated and linked by qmake

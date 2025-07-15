@@ -936,7 +936,7 @@ void StellinaProcessor::loadSettings() {
     m_northTiltSpin->setValue(m_mountTilt.northTilt);
     m_eastTiltSpin->setValue(m_mountTilt.eastTilt);
     updateTiltUI();
-    loadWCSSettings();
+    // loadWCSSettings();
 }
 
 void StellinaProcessor::saveSettings() {
