@@ -1,5 +1,5 @@
-// WcsAstrometricStacker.cpp
-// Implementation of the WCS Astrometric Stacker
+// Updated WcsAstrometricStacker.cpp with TAN projection implementation
+// Replace the WCS-related functions with these implementations
 
 #include "WcsAstrometricStacker.h"
 #include <QFileInfo>
@@ -8,9 +8,121 @@
 #include <QApplication>
 #include <QTextStream>
 #include <QRegularExpression>
+#include <QDebug>
 #include <cmath>
 #include <algorithm>
 
+// SimpleTANWCS implementation
+bool SimpleTANWCS::pixelToWorld(double px, double py, double& ra, double& dec) const {
+    if (!valid) return false;
+    
+    // Convert to 0-indexed and apply CD matrix
+    double dx = px - crpix1;
+    double dy = py - crpix2;
+    
+    double xi = cd11 * dx + cd12 * dy;
+    double eta = cd21 * dx + cd22 * dy;
+    
+    // TAN projection inverse (standard formulae)
+    double ra0_rad = crval1 * M_PI / 180.0;
+    double dec0_rad = crval2 * M_PI / 180.0;
+    double xi_rad = xi * M_PI / 180.0;
+    double eta_rad = eta * M_PI / 180.0;
+    
+    double cos_dec0 = cos(dec0_rad);
+    double sin_dec0 = sin(dec0_rad);
+    
+    double denom = cos_dec0 - eta_rad * sin_dec0;
+    if (std::abs(denom) < 1e-12) return false;
+    
+    double ra_rad = ra0_rad + atan2(xi_rad, denom);
+    double dec_rad = atan((sin_dec0 + eta_rad * cos_dec0) / (sqrt(xi_rad*xi_rad + denom*denom)));
+    
+    ra = ra_rad * 180.0 / M_PI;
+    dec = dec_rad * 180.0 / M_PI;
+    
+    // Normalize RA
+    while (ra < 0) ra += 360.0;
+    while (ra >= 360.0) ra -= 360.0;
+    
+    return true;
+}
+
+bool SimpleTANWCS::worldToPixel(double ra, double dec, double& px, double& py) const {
+    if (!valid) return false;
+    
+    // TAN projection forward
+    double ra_rad = ra * M_PI / 180.0;
+    double dec_rad = dec * M_PI / 180.0;
+    double ra0_rad = crval1 * M_PI / 180.0;
+    double dec0_rad = crval2 * M_PI / 180.0;
+    
+    double cos_dec = cos(dec_rad);
+    double sin_dec = sin(dec_rad);
+    double cos_dec0 = cos(dec0_rad);
+    double sin_dec0 = sin(dec0_rad);
+    double cos_dra = cos(ra_rad - ra0_rad);
+    double sin_dra = sin(ra_rad - ra0_rad);
+    
+    double denom = sin_dec * sin_dec0 + cos_dec * cos_dec0 * cos_dra;
+    if (std::abs(denom) < 1e-12) return false;
+    
+    double xi = cos_dec * sin_dra / denom;
+    double eta = (sin_dec * cos_dec0 - cos_dec * sin_dec0 * cos_dra) / denom;
+    
+    // Convert to degrees
+    xi *= 180.0 / M_PI;
+    eta *= 180.0 / M_PI;
+    
+    // Apply inverse CD matrix
+    double det = cd11 * cd22 - cd12 * cd21;
+    if (std::abs(det) < 1e-12) return false;
+    
+    double dx = (cd22 * xi - cd12 * eta) / det;
+    double dy = (-cd21 * xi + cd11 * eta) / det;
+    
+    px = dx + crpix1;
+    py = dy + crpix2;
+    
+    return true;
+}
+
+void SimpleTANWCS::printDiagnostics() const {
+    if (!valid) {
+        qDebug() << "WCS is invalid";
+        return;
+    }
+    
+    qDebug() << "=== SimpleTAN WCS Diagnostics ===";
+    qDebug() << "Reference point: RA =" << crval1 << "°, Dec =" << crval2 << "°";
+    qDebug() << "Reference pixel: X =" << crpix1 << ", Y =" << crpix2;
+    qDebug() << "CD matrix:";
+    qDebug() << "  " << cd11 << cd12;
+    qDebug() << "  " << cd21 << cd22;
+    
+    double det = cd11 * cd22 - cd12 * cd21;
+    qDebug() << "Matrix determinant:" << det;
+    qDebug() << "Pixel scale:" << getPixelScale() << "arcsec/pixel";
+    
+    // Test reference pixel
+    double ra, dec;
+    if (pixelToWorld(crpix1, crpix2, ra, dec)) {
+        qDebug() << "Reference pixel maps to: RA =" << ra << "°, Dec =" << dec << "°";
+        qDebug() << "Should equal CRVAL1/CRVAL2 - Error: RA =" 
+                 << (ra - crval1) << "°, Dec =" << (dec - crval2) << "°";
+    }
+}
+
+double SimpleTANWCS::getPixelScale() const {
+    if (!valid) return 0.0;
+    
+    // Calculate pixel scale from CD matrix determinant
+    double det = std::abs(cd11 * cd22 - cd12 * cd21);
+    double scale_deg = sqrt(det);
+    return scale_deg * 3600.0; // Convert to arcsec/pixel
+}
+
+// Updated WCSAstrometricStacker constructor
 WCSAstrometricStacker::WCSAstrometricStacker(QObject *parent)
     : QObject(parent)
     , m_progress_bar(nullptr)
@@ -23,16 +135,608 @@ WCSAstrometricStacker::WCSAstrometricStacker(QObject *parent)
     , m_stacked_image()
     , m_pixels_rejected(0)
 {
-    // wcsini(1, 2, &m_output_wcs);
-    memset(&m_output_wcs, 0, sizeof(m_output_wcs));
+    // No WCSLIB initialization needed
     
     // Set up processing timer for non-blocking operation
     m_processing_timer->setSingleShot(true);
-    connect(m_processing_timer, &QTimer::timeout, this, &WCSAstrometricStacker::processNextImage);
+    //    connect(m_processing_timer, &QTimer::timeout, this, &WCSAstrometricStacker::processNextImage);
 }
 
 WCSAstrometricStacker::~WCSAstrometricStacker() {
-    wcsfree(&m_output_wcs);
+    // No WCSLIB cleanup needed
+}
+
+// Updated loadWCSFromFITS function
+bool WCSAstrometricStacker::loadWCSFromFITS(const QString &fits_file, WCSImageData &img_data) {
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = fits_file.toLocal8Bit();
+    if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
+        emit errorOccurred(QString("Failed to open FITS file: %1 (status: %2)").arg(fits_file).arg(status));
+        return false;
+    }
+    
+    img_data.filename = fits_file;
+    img_data.solved_filename = fits_file;
+    
+    // Read essential WCS keywords with error checking
+    auto readKey = [&](const char* keyword, double& value) -> bool {
+        int local_status = 0;
+        return fits_read_key(fptr, TDOUBLE, keyword, &value, nullptr, &local_status) == 0;
+    };
+    
+    bool success = true;
+    success &= readKey("CRVAL1", img_data.wcs.crval1);
+    success &= readKey("CRVAL2", img_data.wcs.crval2);
+    success &= readKey("CRPIX1", img_data.wcs.crpix1);
+    success &= readKey("CRPIX2", img_data.wcs.crpix2);
+    
+    // Try CD matrix first, fall back to CDELT
+    if (readKey("CD1_1", img_data.wcs.cd11) && readKey("CD1_2", img_data.wcs.cd12) &&
+        readKey("CD2_1", img_data.wcs.cd21) && readKey("CD2_2", img_data.wcs.cd22)) {
+        // CD matrix available
+        logProcessing("Using CD matrix for WCS");
+    } else {
+        // Use CDELT and assume no rotation
+        double cdelt1, cdelt2;
+        if (readKey("CDELT1", cdelt1) && readKey("CDELT2", cdelt2)) {
+            img_data.wcs.cd11 = cdelt1; 
+            img_data.wcs.cd12 = 0.0;
+            img_data.wcs.cd21 = 0.0; 
+            img_data.wcs.cd22 = cdelt2;
+            logProcessing("Using CDELT for WCS (no rotation)");
+        } else {
+            success = false;
+            logProcessing("No CD matrix or CDELT found");
+        }
+    }
+    
+    // Verify coordinate types are TAN projection
+    char ctype1[FLEN_VALUE], ctype2[FLEN_VALUE];
+    if (fits_read_key(fptr, TSTRING, "CTYPE1", ctype1, nullptr, &status) == 0 &&
+        fits_read_key(fptr, TSTRING, "CTYPE2", ctype2, nullptr, &status) == 0) {
+        
+        QString ctype1_str = QString::fromLatin1(ctype1).trimmed().remove('\'').remove('"');
+        QString ctype2_str = QString::fromLatin1(ctype2).trimmed().remove('\'').remove('"');
+        
+        if (!ctype1_str.contains("TAN") || !ctype2_str.contains("TAN")) {
+            logProcessing(QString("Warning: Non-TAN projection detected: %1, %2").arg(ctype1_str).arg(ctype2_str));
+            logProcessing("Proceeding anyway - results may be inaccurate for non-TAN projections");
+        }
+    }
+    
+    img_data.wcs.valid = success;
+    img_data.wcs_valid = success;
+    
+    if (success) {
+        logProcessing(QString("WCS loaded successfully from: %1").arg(QFileInfo(fits_file).fileName()));
+        logProcessing(QString("  CRVAL: %1, %2").arg(img_data.wcs.crval1, 0, 'f', 6).arg(img_data.wcs.crval2, 0, 'f', 6));
+        logProcessing(QString("  CRPIX: %1, %2").arg(img_data.wcs.crpix1, 0, 'f', 2).arg(img_data.wcs.crpix2, 0, 'f', 2));
+        logProcessing(QString("  Pixel scale: %1 arcsec/pixel").arg(img_data.wcs.getPixelScale(), 0, 'f', 3));
+        
+        // Print full diagnostics in debug mode
+        if (qEnvironmentVariableIsSet("DEBUG_WCS")) {
+            img_data.wcs.printDiagnostics();
+        }
+    }
+    
+    // Read image dimensions and data
+    long naxes[2];
+    if (fits_get_img_size(fptr, 2, naxes, &status)) {
+        emit errorOccurred(QString("Failed to get image size: %1 (status: %2)").arg(fits_file).arg(status));
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    long totalPixels = naxes[0] * naxes[1];
+    std::vector<float> pixels(totalPixels);
+    
+    if (fits_read_img(fptr, TFLOAT, 1, totalPixels, nullptr, pixels.data(), nullptr, &status)) {
+        emit errorOccurred(QString("Failed to read image data: %1 (status: %2)").arg(fits_file).arg(status));
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    // Convert to OpenCV Mat (FITS is row-major, OpenCV expects this)
+    img_data.image = cv::Mat(naxes[1], naxes[0], CV_32F, pixels.data()).clone();
+    
+    fits_close_file(fptr, &status);
+    
+    logProcessing(QString("Successfully loaded WCS and image data: %1x%2 pixels")
+                 .arg(naxes[0]).arg(naxes[1]));
+    
+    return success;
+}
+
+// Updated computeOptimalWCS function
+bool WCSAstrometricStacker::computeOptimalWCS() {
+    if (m_images.empty()) {
+        emit errorOccurred("No images available for WCS calculation");
+        return false;
+    }
+    
+    logProcessing("Computing optimal output WCS using TAN projection...");
+    
+    // Calculate bounding box in world coordinates
+    double ra_min = 360.0, ra_max = 0.0;
+    double dec_min = 90.0, dec_max = -90.0;
+    
+    // Use the first valid WCS as reference
+    const SimpleTANWCS* ref_wcs = nullptr;
+    for (const auto& img : m_images) {
+        if (img->wcs_valid) {
+            ref_wcs = &img->wcs;
+            break;
+        }
+    }
+    
+    if (!ref_wcs) {
+        emit errorOccurred("No valid WCS found in any image");
+        return false;
+    }
+    
+    logProcessing(QString("Using reference WCS from first image: center RA=%1°, Dec=%2°")
+                 .arg(ref_wcs->crval1, 0, 'f', 6).arg(ref_wcs->crval2, 0, 'f', 6));
+    
+    // For each image, find the corner points in world coordinates
+    for (const auto& img : m_images) {
+        if (!img->wcs_valid) continue;
+        
+        // Get image corners in pixel coordinates (1-indexed for FITS convention)
+        double corners_pix[4][2] = {
+            {1.0, 1.0},  // Bottom left
+            {double(img->image.cols), 1.0},  // Bottom right
+            {1.0, double(img->image.rows)},  // Top left
+            {double(img->image.cols), double(img->image.rows)}  // Top right
+        };
+        
+        // Convert each corner to world coordinates
+        for (int i = 0; i < 4; ++i) {
+            double ra, dec;
+            if (img->wcs.pixelToWorld(corners_pix[i][0], corners_pix[i][1], ra, dec)) {
+                // Handle RA wrapping at 0/360 degrees
+                if (i == 0) {
+                    ra_min = ra_max = ra;
+                } else {
+                    // Check if we cross the RA=0/360 boundary
+                    if (std::abs(ra - ra_min) > 180.0) {
+                        if (ra < ra_min) ra += 360.0;
+                        else ra_min += 360.0;
+                    }
+                    if (std::abs(ra - ra_max) > 180.0) {
+                        if (ra < ra_max) ra += 360.0;
+                        else ra_max += 360.0;
+                    }
+                    
+                    ra_min = std::min(ra_min, ra);
+                    ra_max = std::max(ra_max, ra);
+                }
+                
+                dec_min = std::min(dec_min, dec);
+                dec_max = std::max(dec_max, dec);
+            }
+        }
+    }
+    
+    // Normalize RA range
+    while (ra_min >= 360.0) ra_min -= 360.0;
+    while (ra_max >= 360.0) ra_max -= 360.0;
+    
+    // Add margin
+    double ra_margin = (ra_max - ra_min) * 0.05;
+    double dec_margin = (dec_max - dec_min) * 0.05;
+    
+    ra_min = std::max(0.0, ra_min - ra_margin);
+    ra_max = std::min(360.0, ra_max + ra_margin);
+    dec_min = std::max(-90.0, dec_min - dec_margin);
+    dec_max = std::min(90.0, dec_max + dec_margin);
+    
+    logProcessing(QString("Field bounds: RA=%1° to %2°, Dec=%3° to %4°")
+                 .arg(ra_min, 0, 'f', 4).arg(ra_max, 0, 'f', 4)
+                 .arg(dec_min, 0, 'f', 4).arg(dec_max, 0, 'f', 4));
+    
+    // Determine pixel scale - use the first image as reference if not overridden
+    if (m_params.output_pixel_scale <= 0.0) {
+        m_output_pixel_scale = ref_wcs->getPixelScale();
+    } else {
+        m_output_pixel_scale = m_params.output_pixel_scale;
+    }
+    
+    logProcessing(QString("Using output pixel scale: %1 arcsec/pixel").arg(m_output_pixel_scale, 0, 'f', 3));
+    
+    // Calculate output dimensions based on sky coverage and pixel scale
+    double ra_span_deg = ra_max - ra_min;
+    if (ra_span_deg < 0) ra_span_deg += 360.0;
+    
+    double dec_span_deg = dec_max - dec_min;
+    
+    // Convert to pixels using pixel scale
+    int width, height;
+    
+    // Adjust RA span for cos(Dec) factor at center declination
+    double dec_center = (dec_min + dec_max) / 2.0;
+    double cos_dec_factor = std::cos(dec_center * M_PI / 180.0);
+    if (cos_dec_factor < 0.01) cos_dec_factor = 0.01; // Avoid division by very small values
+    
+    width = int(ra_span_deg * 3600.0 / (m_output_pixel_scale / cos_dec_factor));
+    height = int(dec_span_deg * 3600.0 / m_output_pixel_scale);
+    
+    // Override dimensions if specified
+    if (m_params.output_width > 0) width = m_params.output_width;
+    if (m_params.output_height > 0) height = m_params.output_height;
+    
+    // Limit to reasonable size
+    width = std::min(std::max(width, 100), 10000);
+    height = std::min(std::max(height, 100), 10000);
+    
+    m_output_size = cv::Size(width, height);
+    
+    logProcessing(QString("Output dimensions: %1 x %2 pixels").arg(width).arg(height));
+    
+    // Initialize output WCS as TAN projection centered on field
+    double ra_center = (ra_min + ra_max) / 2.0;
+    if (ra_max < ra_min) ra_center = fmod(ra_center + 180.0, 360.0); // Handle RA wrap
+    
+    m_output_wcs.crpix1 = width / 2.0 + 0.5;   // Center pixel X (1-indexed)
+    m_output_wcs.crpix2 = height / 2.0 + 0.5;  // Center pixel Y (1-indexed)
+    m_output_wcs.crval1 = ra_center;           // RA at reference pixel
+    m_output_wcs.crval2 = dec_center;          // Dec at reference pixel
+    m_output_wcs.cd11 = -m_output_pixel_scale / 3600.0; // RA step (degrees, negative for normal orientation)
+    m_output_wcs.cd12 = 0.0;                            // No rotation
+    m_output_wcs.cd21 = 0.0;                            // No rotation
+    m_output_wcs.cd22 = m_output_pixel_scale / 3600.0;  // Dec step (degrees)
+    m_output_wcs.valid = true;
+    
+    logProcessing(QString("Output WCS computed: center RA=%1°, Dec=%2°")
+                 .arg(ra_center, 0, 'f', 6)
+                 .arg(dec_center, 0, 'f', 6));
+    
+    // Test the output WCS
+    double test_ra, test_dec;
+    if (m_output_wcs.pixelToWorld(m_output_wcs.crpix1, m_output_wcs.crpix2, test_ra, test_dec)) {
+        logProcessing(QString("WCS test: center pixel maps to RA=%1°, Dec=%2° (should match center)")
+                     .arg(test_ra, 0, 'f', 6).arg(test_dec, 0, 'f', 6));
+    }
+    
+    return true;
+}
+
+// Updated stackImages function core loop
+bool WCSAstrometricStacker::stackImages() {
+    updateProgress(0, "Starting TAN projection astrometric stacking...");
+    
+    if (m_images.empty()) {
+        emit errorOccurred("No images loaded for stacking");
+        return false;
+    }
+    
+    // Step 1: Compute optimal output WCS and dimensions
+    updateProgress(5, "Computing optimal output coordinate system...");
+    if (!computeOptimalWCS()) {
+        emit errorOccurred("Failed to compute optimal WCS");
+        return false;
+    }
+    
+    // Initialize output images
+    m_stacked_image = cv::Mat::zeros(m_output_size, CV_32F);
+    m_weight_map = cv::Mat::zeros(m_output_size, CV_32F);
+    m_overlap_map = cv::Mat::zeros(m_output_size, CV_8U);
+    
+    // Prepare for pixel rejection if using sigma clipping
+    std::vector<std::vector<float>> pixelStacks;
+    std::vector<std::vector<float>> weightStacks;
+    bool useSigmaClipping = (m_params.rejection == StackingParams::SIGMA_CLIPPING);
+    
+    if (useSigmaClipping) {
+        pixelStacks.resize(m_output_size.height * m_output_size.width);
+        weightStacks.resize(m_output_size.height * m_output_size.width);
+    }
+    
+    // Step 2: Reproject and combine each image
+    m_pixels_processed = 0;
+    m_pixels_rejected = 0;
+    
+    for (size_t i = 0; i < m_images.size(); ++i) {
+        updateProgress(10 + (i * 80) / m_images.size(), 
+                       QString("Processing image %1 of %2: %3")
+                       .arg(i+1)
+                       .arg(m_images.size())
+                       .arg(QFileInfo(m_images[i]->filename).fileName()));
+        
+        // Get current image data
+        const auto& img = m_images[i];
+        if (!img->wcs_valid || img->image.empty()) {
+            logProcessing(QString("Skipping invalid image: %1").arg(QFileInfo(img->filename).fileName()));
+            continue;
+        }
+        
+        // Calculate image weight based on quality and exposure
+        float imageWeight = img->quality_score;
+        if (m_params.normalize_exposure && img->exposure_time > 0) {
+            imageWeight *= img->exposure_time;
+        }
+        
+        int pixelsProcessedThisImage = 0;
+        
+        // Loop through output pixels and find corresponding input pixels
+        for (int y = 0; y < m_output_size.height; ++y) {
+            for (int x = 0; x < m_output_size.width; ++x) {
+                // Convert output pixel (x,y) to world coordinates (RA,Dec)
+                double ra, dec;
+                if (m_output_wcs.pixelToWorld(x + 1.0, y + 1.0, ra, dec)) {
+                    
+                    // Now convert world coordinates to input image pixel coordinates
+                    double imgpx, imgpy;
+                    if (img->wcs.worldToPixel(ra, dec, imgpx, imgpy)) {
+                        
+                        // Check if the pixel is within the input image bounds (1-indexed to 0-indexed)
+                        float srcX = imgpx - 1.0f;
+                        float srcY = imgpy - 1.0f;
+                        
+                        if (srcX >= 0.0f && srcX < img->image.cols - 1 &&
+                            srcY >= 0.0f && srcY < img->image.rows - 1) {
+                            
+                            // Perform bilinear interpolation to get pixel value
+                            int x0 = int(floor(srcX));
+                            int y0 = int(floor(srcY));
+                            int x1 = x0 + 1;
+                            int y1 = y0 + 1;
+                            
+                            // Ensure we stay within bounds
+                            if (x0 >= 0 && x1 < img->image.cols && y0 >= 0 && y1 < img->image.rows) {
+                                float dx = srcX - x0;
+                                float dy = srcY - y0;
+                                
+                                float v00 = img->image.at<float>(y0, x0);
+                                float v01 = img->image.at<float>(y0, x1);
+                                float v10 = img->image.at<float>(y1, x0);
+                                float v11 = img->image.at<float>(y1, x1);
+                                
+                                float v0 = v00 * (1 - dx) + v01 * dx;
+                                float v1 = v10 * (1 - dx) + v11 * dx;
+                                
+                                float pixelValue = v0 * (1 - dy) + v1 * dy;
+                                
+                                // Skip if pixel is invalid (NaN or Inf)
+                                if (std::isfinite(pixelValue)) {
+                                    if (useSigmaClipping) {
+                                        // For sigma clipping, store all values for later processing
+                                        int idx = y * m_output_size.width + x;
+                                        pixelStacks[idx].push_back(pixelValue);
+                                        weightStacks[idx].push_back(imageWeight);
+                                    } else {
+                                        // For direct stacking methods
+                                        m_stacked_image.at<float>(y, x) += pixelValue * imageWeight;
+                                        m_weight_map.at<float>(y, x) += imageWeight;
+                                        m_overlap_map.at<uchar>(y, x)++;
+                                    }
+                                    
+                                    pixelsProcessedThisImage++;
+                                    m_pixels_processed++;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        logProcessing(QString("Reprojected image %1: %2 pixels processed")
+                     .arg(i+1)
+                     .arg(pixelsProcessedThisImage));
+    }
+    
+    // Step 3: Perform pixel rejection if using sigma clipping
+    if (useSigmaClipping) {
+        updateProgress(90, "Performing sigma clipping rejection...");
+        
+        // Process each pixel stack
+        for (int y = 0; y < m_output_size.height; ++y) {
+            for (int x = 0; x < m_output_size.width; ++x) {
+                int idx = y * m_output_size.width + x;
+                std::vector<float>& pixelStack = pixelStacks[idx];
+                std::vector<float>& weightStack = weightStacks[idx];
+                
+                if (!pixelStack.empty()) {
+                    // Compute mean and standard deviation
+                    float sum = 0.0f, sumSq = 0.0f;
+                    for (float val : pixelStack) {
+                        sum += val;
+                        sumSq += val * val;
+                    }
+                    
+                    float mean = sum / pixelStack.size();
+                    float variance = (sumSq / pixelStack.size()) - (mean * mean);
+                    float stddev = sqrt(std::max(0.0f, variance));
+                    
+                    // Apply sigma clipping
+                    float lowThreshold = mean - m_params.sigma_low * stddev;
+                    float highThreshold = mean + m_params.sigma_high * stddev;
+                    
+                    float pixelSum = 0.0f;
+                    float weightSum = 0.0f;
+                    int validPixels = 0;
+                    
+                    for (size_t i = 0; i < pixelStack.size(); ++i) {
+                        float pixelValue = pixelStack[i];
+                        float weight = weightStack[i];
+                        
+                        if (pixelValue >= lowThreshold && pixelValue <= highThreshold) {
+                            pixelSum += pixelValue * weight;
+                            weightSum += weight;
+                            validPixels++;
+                        } else {
+                            m_pixels_rejected++;
+                        }
+                    }
+                    
+                    if (weightSum > 0) {
+                        m_stacked_image.at<float>(y, x) = pixelSum / weightSum;
+                        m_weight_map.at<float>(y, x) = weightSum;
+                        m_overlap_map.at<uchar>(y, x) = validPixels;
+                    }
+                }
+            }
+        }
+        
+        logProcessing(QString("Sigma clipping completed: rejected %1 of %2 pixels (%3%)")
+                     .arg(m_pixels_rejected)
+                     .arg(m_pixels_processed)
+                     .arg(m_pixels_processed > 0 ? (m_pixels_rejected * 100.0 / m_pixels_processed) : 0.0, 0, 'f', 1));
+    } else {
+        // Step 3 (alternative): Normalize by weights for non-sigma-clipping methods
+        updateProgress(90, "Normalizing stacked image...");
+        
+        // Normalize by total weight
+        for (int y = 0; y < m_output_size.height; ++y) {
+            for (int x = 0; x < m_output_size.width; ++x) {
+                if (m_weight_map.at<float>(y, x) > 0) {
+                    m_stacked_image.at<float>(y, x) /= m_weight_map.at<float>(y, x);
+                }
+            }
+        }
+    }
+    
+    // Step 4: Final post-processing
+    updateProgress(95, "Performing final image adjustments...");
+    
+    // Create a mask for pixels with no data
+    cv::Mat mask = (m_weight_map > 0);
+    
+    // Calculate statistics for the stacked image
+    double minVal, maxVal;
+    cv::Scalar meanVal = cv::mean(m_stacked_image, mask);
+    cv::minMaxLoc(m_stacked_image, &minVal, &maxVal, nullptr, nullptr, mask);
+    
+    // Count valid pixels
+    int validPixels = cv::countNonZero(mask);
+    
+    logProcessing(QString("Stacking complete - Image statistics:"));
+    logProcessing(QString("  Valid pixels: %1 of %2 (%3%)")
+                 .arg(validPixels)
+                 .arg(m_output_size.area())
+                 .arg(validPixels * 100.0 / m_output_size.area(), 0, 'f', 1));
+    logProcessing(QString("  Pixel values: min=%1, max=%2, mean=%3")
+                 .arg(minVal, 0, 'f', 2)
+                 .arg(maxVal, 0, 'f', 2)
+                 .arg(meanVal[0], 0, 'f', 2));
+    
+    // Create noise map if requested
+    if (m_params.create_weight_map) {
+        m_noise_map = cv::Mat::zeros(m_output_size, CV_32F);
+        for (int y = 0; y < m_output_size.height; ++y) {
+            for (int x = 0; x < m_output_size.width; ++x) {
+                float weight = m_weight_map.at<float>(y, x);
+                if (weight > 0) {
+                    // Noise decreases with sqrt(N) where N is effective number of images
+                    m_noise_map.at<float>(y, x) = 1.0f / sqrt(weight);
+                }
+            }
+        }
+    }
+    
+    updateProgress(100, "TAN projection stacking successfully completed");
+    emit stackingComplete(true);
+    
+    return true;
+}
+
+// Updated saveResult function
+bool WCSAstrometricStacker::saveResult(const QString &output_path) {
+    if (m_stacked_image.empty()) {
+        return false;
+    }
+    
+    updateProgress(0, "Saving TAN projection result...");
+    
+    fitsfile *fptr = nullptr;
+    int status = 0;
+    
+    QByteArray pathBytes = QString("!%1").arg(output_path).toLocal8Bit();
+    if (fits_create_file(&fptr, pathBytes.data(), &status)) {
+        return false;
+    }
+    
+    long naxes[2] = {m_stacked_image.cols, m_stacked_image.rows};
+    if (fits_create_img(fptr, FLOAT_IMG, 2, naxes, &status)) {
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    // Convert OpenCV Mat to FITS format
+    long totalPixels = m_stacked_image.rows * m_stacked_image.cols;
+    std::vector<float> pixels(totalPixels);
+    
+    for (int y = 0; y < m_stacked_image.rows; ++y) {
+        for (int x = 0; x < m_stacked_image.cols; ++x) {
+            pixels[y * m_stacked_image.cols + x] = m_stacked_image.at<float>(y, x);
+        }
+    }
+    
+    if (fits_write_img(fptr, TFLOAT, 1, totalPixels, pixels.data(), &status)) {
+        fits_close_file(fptr, &status);
+        return false;
+    }
+    
+    // Write complete WCS keywords for TAN projection
+    fits_write_key(fptr, TDOUBLE, "CRVAL1", &m_output_wcs.crval1, "Reference RA (degrees)", &status);
+    fits_write_key(fptr, TDOUBLE, "CRVAL2", &m_output_wcs.crval2, "Reference Dec (degrees)", &status);
+    fits_write_key(fptr, TDOUBLE, "CRPIX1", &m_output_wcs.crpix1, "Reference pixel X", &status);
+    fits_write_key(fptr, TDOUBLE, "CRPIX2", &m_output_wcs.crpix2, "Reference pixel Y", &status);
+    
+    // Write CD matrix
+    fits_write_key(fptr, TDOUBLE, "CD1_1", &m_output_wcs.cd11, "Coordinate matrix element", &status);
+    fits_write_key(fptr, TDOUBLE, "CD1_2", &m_output_wcs.cd12, "Coordinate matrix element", &status);
+    fits_write_key(fptr, TDOUBLE, "CD2_1", &m_output_wcs.cd21, "Coordinate matrix element", &status);
+    fits_write_key(fptr, TDOUBLE, "CD2_2", &m_output_wcs.cd22, "Coordinate matrix element", &status);
+    
+    // Write coordinate types
+    char ctype1[] = "RA---TAN";
+    char ctype2[] = "DEC--TAN";
+    char* ctype1_ptr = ctype1;
+    char* ctype2_ptr = ctype2;
+    fits_write_key(fptr, TSTRING, "CTYPE1", &ctype1_ptr, "Coordinate type", &status);
+    fits_write_key(fptr, TSTRING, "CTYPE2", &ctype2_ptr, "Coordinate type", &status);
+    
+    // Write coordinate units
+    char cunit1[] = "deg";
+    char cunit2[] = "deg";
+    char* cunit1_ptr = cunit1;
+    char* cunit2_ptr = cunit2;
+    fits_write_key(fptr, TSTRING, "CUNIT1", &cunit1_ptr, "Coordinate unit", &status);
+    fits_write_key(fptr, TSTRING, "CUNIT2", &cunit2_ptr, "Coordinate unit", &status);
+    
+    // Add processing information
+    int nimages = m_images.size();
+    fits_write_key(fptr, TINT, "NSTACKED", &nimages, "Number of stacked images", &status);
+    
+    double pixelScale = m_output_wcs.getPixelScale();
+    fits_write_key(fptr, TDOUBLE, "PIXSCALE", &pixelScale, "Pixel scale (arcsec/pixel)", &status);
+    
+    // Add processing method
+    QString method = QString("TAN_PROJECTION_%1").arg(static_cast<int>(m_params.combination));
+    QByteArray methodBytes = method.toLocal8Bit();
+    char* methodPtr = methodBytes.data();
+    fits_write_key(fptr, TSTRING, "STACKMET", &methodPtr, "Stacking method", &status);
+    
+    // Add history
+    QString history = QString("Stacked %1 images using TAN projection astrometric alignment").arg(nimages);
+    QByteArray historyBytes = history.toLocal8Bit();
+    fits_write_history(fptr, historyBytes.data(), &status);
+    
+    fits_close_file(fptr, &status);
+    
+    updateProgress(100, "Save complete");
+    
+    return (status == 0);
+}
+
+// Missing member function implementations
+
+void WCSAstrometricStacker::setProgressWidgets(QProgressBar *progress, QLabel *status) {
+    m_progress_bar = progress;
+    m_status_label = status;
 }
 
 bool WCSAstrometricStacker::addImage(const QString &fits_file, const QString &solved_fits_file) {
@@ -43,6 +747,13 @@ bool WCSAstrometricStacker::addImage(const QString &fits_file, const QString &so
 
 bool WCSAstrometricStacker::addImageWithMetadata(const QString &fits_file, const StellinaImageData &stellina_data) {
     return addImageFromStellinaData(fits_file, stellina_data);
+}
+
+void WCSAstrometricStacker::setStackingParameters(const StackingParams &params) {
+    m_params = params;
+    logProcessing(QString("Updated stacking parameters: method=%1, rejection=%2")
+                 .arg(static_cast<int>(params.combination))
+                 .arg(static_cast<int>(params.rejection)));
 }
 
 bool WCSAstrometricStacker::addPlatesolveDFITSFile(const QString &solved_fits_file) {
@@ -72,6 +783,10 @@ bool WCSAstrometricStacker::addPlatesolveDFITSFile(const QString &solved_fits_fi
         if (fits_read_key(fptr, TSTRING, "DATE-OBS", dateobs, nullptr, &status) == 0) {
             QString dateStr = QString::fromLatin1(dateobs).trimmed().remove('\'').remove('"');
             img_data->obs_time = QDateTime::fromString(dateStr, "yyyy-MM-ddThh:mm:ss");
+            if (!img_data->obs_time.isValid()) {
+                // Try alternative formats
+                img_data->obs_time = QDateTime::fromString(dateStr, "yyyy-MM-ddThh:mm:ss.zzz");
+            }
         }
         
         fits_close_file(fptr, &status);
@@ -104,6 +819,9 @@ bool WCSAstrometricStacker::addImageFromStellinaData(const QString &fits_file,
     // Integrate Stellina-specific data
     img_data->exposure_time = stellina_data.exposureSeconds;
     img_data->obs_time = QDateTime::fromString(stellina_data.dateObs, "yyyy-MM-ddThh:mm:ss");
+    if (!img_data->obs_time.isValid()) {
+        img_data->obs_time = QDateTime::fromString(stellina_data.dateObs, "yyyy-MM-ddThh:mm:ss.zzz");
+    }
     
     // Use Stellina quality metrics if available
     if (stellina_data.hasValidCoordinates) {
@@ -125,132 +843,6 @@ bool WCSAstrometricStacker::addImageFromStellinaData(const QString &fits_file,
     return true;
 }
 
-void WCSAstrometricStacker::setStackingParameters(const StackingParams &params) {
-    m_params = params;
-    logProcessing(QString("Updated stacking parameters: method=%1, rejection=%2")
-                 .arg(static_cast<int>(params.combination))
-                 .arg(static_cast<int>(params.rejection)));
-}
-
-void WCSAstrometricStacker::setProgressWidgets(QProgressBar *progress, QLabel *status) {
-    m_progress_bar = progress;
-    m_status_label = status;
-}
-
-bool WCSAstrometricStacker::loadWCSFromFITS(const QString &fits_file, WCSImageData &img_data) {
-    fitsfile *fptr = nullptr;
-    int status = 0;
-    
-    QByteArray pathBytes = fits_file.toLocal8Bit();
-    if (fits_open_file(&fptr, pathBytes.data(), READONLY, &status)) {
-        emit errorOccurred(QString("Failed to open FITS file: %1 (status: %2)").arg(fits_file).arg(status));
-        return false;
-    }
-    
-    img_data.filename = fits_file;
-    img_data.solved_filename = fits_file;
-    
-    // First, get the number of header keywords properly
-    int nkeys = 0;
-    if (fits_get_hdrspace(fptr, &nkeys, nullptr, &status)) {
-        emit errorOccurred(QString("Failed to get header space: %1 (status: %2)").arg(fits_file).arg(status));
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    if (nkeys == 0) {
-        emit errorOccurred(QString("FITS file has no header keywords: %1").arg(fits_file));
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    // Read WCS header with proper parameters
-    char *header = nullptr;
-    int nkeysret = 0;
-    
-    // Use fits_hdr2str with correct parameters:
-    // - excludecomm = 1 (exclude comment and history)
-    // - nkeywords = 0 (return all keywords)
-    if (fits_hdr2str(fptr, 1, nullptr, 0, &header, &nkeysret, &status)) {
-        emit errorOccurred(QString("Failed to read FITS header: %1 (status: %2)").arg(fits_file).arg(status));
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    if (!header || nkeysret == 0) {
-        emit errorOccurred(QString("Empty FITS header returned: %1 (nkeys: %2)").arg(fits_file).arg(nkeysret));
-        if (header) free(header);
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    // Debug output to understand what we got
-    logProcessing(QString("FITS header read: %1 keywords from %2").arg(nkeysret).arg(QFileInfo(fits_file).fileName()));
-    
-    // Parse WCS using wcspih
-    int nreject = 0, nwcs = 0;
-    struct wcsprm *wcs = nullptr;
-    
-    // Use wcspih to parse WCS from header string
-    int wcspih_status = wcspih(header, nkeysret, WCSHDR_all, 2, &nreject, &nwcs, &wcs);
-    
-    if (wcspih_status) {
-        emit errorOccurred(QString("WCS parsing failed: %1 (wcspih status: %2, nwcs: %3, nreject: %4)")
-                          .arg(fits_file).arg(wcspih_status).arg(nwcs).arg(nreject));
-        free(header);
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    if (nwcs == 0) {
-        emit errorOccurred(QString("No WCS found in FITS file: %1 (rejected: %2)").arg(fits_file).arg(nreject));
-        free(header);
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    // Copy the first WCS structure
-    img_data.wcs = wcs[0];
-    if (wcsset(&img_data.wcs)) {
-        emit errorOccurred(QString("WCS setup failed: %1").arg(fits_file));
-        free(header);
-        wcsvfree(&nwcs, &wcs);
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    img_data.wcs_valid = true;
-    
-    // Clean up WCS memory
-    wcsvfree(&nwcs, &wcs);
-    free(header);
-    
-    // Read image dimensions and data
-    long naxes[2];
-    if (fits_get_img_size(fptr, 2, naxes, &status)) {
-        emit errorOccurred(QString("Failed to get image size: %1 (status: %2)").arg(fits_file).arg(status));
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    long totalPixels = naxes[0] * naxes[1];
-    std::vector<float> pixels(totalPixels);
-    
-    if (fits_read_img(fptr, TFLOAT, 1, totalPixels, nullptr, pixels.data(), nullptr, &status)) {
-        emit errorOccurred(QString("Failed to read image data: %1 (status: %2)").arg(fits_file).arg(status));
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    // Convert to OpenCV Mat (note: FITS is row-major, OpenCV expects this)
-    img_data.image = cv::Mat(naxes[1], naxes[0], CV_32F, pixels.data()).clone();
-    
-    fits_close_file(fptr, &status);
-    
-    logProcessing(QString("Successfully loaded WCS and image data from: %1").arg(QFileInfo(fits_file).fileName()));
-    return (status == 0);
-}
-
 bool WCSAstrometricStacker::extractImageStatistics(WCSImageData &img_data) {
     if (img_data.image.empty()) return false;
     
@@ -263,8 +855,8 @@ bool WCSAstrometricStacker::extractImageStatistics(WCSImageData &img_data) {
     
     // Estimate star count by counting bright pixels
     cv::Mat mask;
-    cv::threshold(img_data.image, mask, img_data.background_level + 3 * img_data.noise_level, 
-                  255, cv::THRESH_BINARY);
+    double threshold = img_data.background_level + 3 * img_data.noise_level;
+    cv::threshold(img_data.image, mask, threshold, 255, cv::THRESH_BINARY);
     
     // Convert to 8-bit for contour detection
     cv::Mat mask8;
@@ -294,7 +886,9 @@ bool WCSAstrometricStacker::computeImageQualityScore(WCSImageData &img_data) {
     }
     
     // Factor in star count (more stars = better registration)
-    quality *= std::min(1.0, img_data.star_count / 200.0);
+    if (img_data.star_count > 0) {
+        quality *= std::min(1.0, img_data.star_count / 200.0);
+    }
     
     // Factor in Stellina-specific metrics
     if (img_data.stellina_stars_used > 0) {
@@ -317,6 +911,11 @@ void WCSAstrometricStacker::startStacking() {
         return;
     }
     
+    m_stacking_active = true;
+    m_current_image_index = 0;
+    
+    updateProgress(0, "Starting TAN projection stacking...");
+    
     if (!stackImages()) {
         emit errorOccurred("Stacking process failed");
         return;
@@ -336,16 +935,46 @@ void WCSAstrometricStacker::analyzeImageQuality() {
     // Quality analysis is already done during image loading
     // This could be expanded to do more detailed analysis
     logProcessing("Image quality analysis complete");
+    
+    if (m_images.empty()) return;
+    
+    // Calculate aggregate statistics
+    double totalQuality = 0.0;
+    double totalExposure = 0.0;
+    int totalStars = 0;
+    
+    for (const auto& img : m_images) {
+        totalQuality += img->quality_score;
+        totalExposure += img->exposure_time;
+        totalStars += img->star_count;
+    }
+    
+    double avgQuality = totalQuality / m_images.size();
+    double avgStars = double(totalStars) / m_images.size();
+    
+    logProcessing(QString("Quality analysis: %1 images, avg quality: %2, avg stars: %3, total exposure: %4s")
+                 .arg(m_images.size())
+                 .arg(avgQuality, 0, 'f', 3)
+                 .arg(avgStars, 0, 'f', 1)
+                 .arg(totalExposure, 0, 'f', 1));
 }
 
 QString WCSAstrometricStacker::getQualityReport() const {
     QStringList report;
     
-    report << "=== WCS Astrometric Stacking Quality Report ===";
+    report << "=== TAN Projection Astrometric Stacking Quality Report ===";
     report << "";
     report << QString("Total images processed: %1").arg(m_images.size());
-    report << QString("Output dimensions: %1 x %2 pixels").arg(m_output_size.width).arg(m_output_size.height);
-    report << QString("Output pixel scale: %1 arcsec/pixel").arg(m_output_pixel_scale, 0, 'f', 2);
+    
+    if (!m_stacked_image.empty()) {
+        report << QString("Output dimensions: %1 x %2 pixels").arg(m_output_size.width).arg(m_output_size.height);
+    }
+    
+    if (m_output_wcs.valid) {
+        report << QString("Output pixel scale: %1 arcsec/pixel").arg(m_output_wcs.getPixelScale(), 0, 'f', 2);
+        report << QString("Field center: RA=%1°, Dec=%2°").arg(m_output_wcs.crval1, 0, 'f', 6).arg(m_output_wcs.crval2, 0, 'f', 6);
+    }
+    
     report << QString("Total exposure time: %1 seconds").arg(getTotalExposureTime(), 0, 'f', 1);
     report << QString("Average image quality: %1").arg(getAverageQuality(), 0, 'f', 3);
     
@@ -410,696 +1039,9 @@ void WCSAstrometricStacker::logProcessing(const QString &message) {
     m_processing_log.append(QString("[%1] %2").arg(timestamp).arg(message));
 }
 
-/*
-* wcsp2s() - Pixel-to-world transformation
-* ----------------------------------------
-* wcsp2s() transforms pixel coordinates to world coordinates.
-*
-* Given and returned:
-*   wcs       struct wcsprm*
-*                       Coordinate transformation parameters.
-*
-* Given:
-*   ncoord,
-*   nelem     int       The number of coordinates, each of vector length
-*                       nelem but containing wcs.naxis coordinate elements.
-*                       Thus nelem must equal or exceed the value of the
-*                       NAXIS keyword unless ncoord == 1, in which case nelem
-*                       is not used.
-*
-*   pixcrd    const double[ncoord][nelem]
-*                       Array of pixel coordinates.
-*
-* Returned:
-*   imgcrd    double[ncoord][nelem]
-*                       Array of intermediate world coordinates.  For
-*                       celestial axes, imgcrd[][wcs.lng] and
-*                       imgcrd[][wcs.lat] are the projected x-, and
-*                       y-coordinates in pseudo "degrees".  For spectral
-*                       axes, imgcrd[][wcs.spec] is the intermediate spectral
-*                       coordinate, in SI units.  For time axes,
-*                       imgcrd[][wcs.time] is the intermediate time
-*                       coordinate.
-*
-*   phi,theta double[ncoord]
-*                       Longitude and latitude in the native coordinate system
-*                       of the projection [deg].
-*
-*   world     double[ncoord][nelem]
-*                       Array of world coordinates.  For celestial axes,
-*                       world[][wcs.lng] and world[][wcs.lat] are the
-*                       celestial longitude and latitude [deg].  For spectral
-*                       axes, world[][wcs.spec] is the spectral coordinate, in
-*                       SI units.  For time axes, world[][wcs.time] is the
-*                       time coordinate.
-*
-*   stat      int[ncoord]
-*                       Status return value for each coordinate:
-*                         0: Success.
-*                        1+: A bit mask indicating invalid pixel coordinate
-*                            element(s).
-*
-* Function return value:
-*             int       Status return value:
-*                         0: Success.
-*                         1: Null wcsprm pointer passed.
-*                         2: Memory allocation failed.
-*                         3: Linear transformation matrix is singular.
-*                         4: Inconsistent or unrecognized coordinate axis
-*                            types.
-*                         5: Invalid parameter value.
-*                         6: Invalid coordinate transformation parameters.
-*                         7: Ill-conditioned coordinate transformation
-*                            parameters.
-*                         8: One or more of the pixel coordinates were
-*                            invalid, as indicated by the stat vector.
-*
-*                       For returns > 1, a detailed error message is set in
-*                       wcsprm::err if enabled, see wcserr_enable().
-*/
-
-int wcsp2s(struct wcsprm *wcs, int ncoord, int nelem, const double pixcrd[],
-           double imgcrd[], double phi[], double theta[], double world[],
-           int stat[]);
-
-bool WCSAstrometricStacker::stackImages() {
-    updateProgress(0, "Starting WCS astrometric stacking...");
-    
-    if (m_images.empty()) {
-        emit errorOccurred("No images loaded for stacking");
-        return false;
-    }
-    
-    // Step 1: Compute optimal output WCS and dimensions
-    updateProgress(5, "Computing optimal output coordinate system...");
-    if (!computeOptimalWCS()) {
-        emit errorOccurred("Failed to compute optimal WCS");
-        return false;
-    }
-    
-    // Initialize output images
-    m_stacked_image = cv::Mat::zeros(m_output_size, CV_32F);
-    m_weight_map = cv::Mat::zeros(m_output_size, CV_32F);
-    m_overlap_map = cv::Mat::zeros(m_output_size, CV_8U);
-    
-    // Prepare for pixel rejection if using sigma clipping
-    std::vector<cv::Mat> pixelStacks;
-    std::vector<cv::Mat> weightStacks;
-    bool useSigmaClipping = (m_params.rejection == StackingParams::SIGMA_CLIPPING);
-    
-    if (useSigmaClipping) {
-        pixelStacks.resize(m_output_size.height * m_output_size.width);
-        weightStacks.resize(m_output_size.height * m_output_size.width);
-    }
-    
-    // Step 2: Reproject and combine each image
-    m_pixels_processed = 0;
-    m_pixels_rejected = 0;
-    
-    for (size_t i = 0; i < m_images.size(); ++i) {
-        updateProgress(10 + (i * 80) / m_images.size(), 
-                       QString("Processing image %1 of %2: %3")
-                       .arg(i+1)
-                       .arg(m_images.size())
-                       .arg(QFileInfo(m_images[i]->filename).fileName()));
-        
-        // Get current image data
-        const auto& img = m_images[i];
-        if (!img->wcs_valid || img->image.empty()) {
-            logProcessing(QString("Skipping invalid image: %1").arg(QFileInfo(img->filename).fileName()));
-            continue;
-        }
-        
-        // Create temporary reprojected image and weight map
-        cv::Mat reprojected = cv::Mat::zeros(m_output_size, CV_32F);
-        cv::Mat weights = cv::Mat::zeros(m_output_size, CV_32F);
-        
-        // Calculate image weight based on quality and exposure
-        float imageWeight = img->quality_score;
-        if (m_params.normalize_exposure && img->exposure_time > 0) {
-            imageWeight *= img->exposure_time;
-        }
-        
-        // Loop through output pixels and find corresponding input pixels
-        #pragma omp parallel for
-        for (int y = 0; y < m_output_size.height; ++y) {
-            for (int x = 0; x < m_output_size.width; ++x) {
-                // Convert output pixel (x,y) to world coordinates (RA,Dec)
-                double pixcrd[2] = {x + 1.0, y + 1.0};  // FITS is 1-indexed
-                double world[2] = {0.0, 0.0};
-		double imgcrd[2] = {0.0, 0.0};    // Add missing
-                double phi = 0.0, theta = 0.0;
-                int stat[1] = {0};                // Add missing
-		
-                // Use WCS to transform from pixel to world coordinates
-                if (wcsp2s(&m_output_wcs, 1, 2, pixcrd, imgcrd, &phi, &theta, world, stat) == 0) {
-                    // Now convert world coordinates to input image pixel coordinates
-                    double imgpix[2] = {0.0, 0.0};
-                    double imgcrd2[2] = {0.0, 0.0}; // Add missing
-		    int stat2[1] = {0};             // Add missing
-    
-                    if (wcss2p(&img->wcs, 1, 2, world, &phi, &theta, imgcrd2, imgpix, stat2) == 0) {
-                        // Check if the pixel is within the input image bounds
-                        if (imgpix[0] >= 1.0 && imgpix[0] <= img->image.cols &&
-                            imgpix[1] >= 1.0 && imgpix[1] <= img->image.rows) {
-                            
-                            // Convert to 0-indexed for OpenCV
-                            float srcX = imgpix[0] - 1.0;
-                            float srcY = imgpix[1] - 1.0;
-                            
-                            // Perform bilinear interpolation to get pixel value
-                            float pixelValue = 0.0f;
-                            
-                            // Bilinear interpolation
-                            int x0 = floor(srcX);
-                            int y0 = floor(srcY);
-                            int x1 = x0 + 1;
-                            int y1 = y0 + 1;
-                            
-                            if (x0 >= 0 && x1 < img->image.cols && y0 >= 0 && y1 < img->image.rows) {
-                                float dx = srcX - x0;
-                                float dy = srcY - y0;
-                                
-                                float v00 = img->image.at<float>(y0, x0);
-                                float v01 = img->image.at<float>(y0, x1);
-                                float v10 = img->image.at<float>(y1, x0);
-                                float v11 = img->image.at<float>(y1, x1);
-                                
-                                float v0 = v00 * (1 - dx) + v01 * dx;
-                                float v1 = v10 * (1 - dx) + v11 * dx;
-                                
-                                pixelValue = v0 * (1 - dy) + v1 * dy;
-                                
-                                // Skip if pixel is invalid (NaN or Inf)
-                                if (std::isfinite(pixelValue)) {
-                                    if (useSigmaClipping) {
-                                        // For sigma clipping, store all values for later processing
-                                        int idx = y * m_output_size.width + x;
-                                        pixelStacks[idx].push_back(pixelValue);
-                                        weightStacks[idx].push_back(imageWeight);
-                                    } else {
-                                        // For direct stacking methods
-                                        #pragma omp critical
-                                        {
-                                            reprojected.at<float>(y, x) = pixelValue;
-                                            weights.at<float>(y, x) = imageWeight;
-                                        }
-                                    }
-                                    
-                                    #pragma omp atomic
-                                    m_pixels_processed++;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // If not using sigma clipping, add this image's contribution to the stack
-        if (!useSigmaClipping) {
-            // Combine this image with the stack
-            for (int y = 0; y < m_output_size.height; ++y) {
-                for (int x = 0; x < m_output_size.width; ++x) {
-                    float w = weights.at<float>(y, x);
-                    if (w > 0) {
-                        m_stacked_image.at<float>(y, x) += reprojected.at<float>(y, x) * w;
-                        m_weight_map.at<float>(y, x) += w;
-                        m_overlap_map.at<uchar>(y, x)++;
-                    }
-                }
-            }
-        }
-        
-        logProcessing(QString("Reprojected image %1: %2 pixels processed")
-                     .arg(i+1)
-                     .arg(m_pixels_processed));
-    }
-    
-    // Step 3: Perform pixel rejection if using sigma clipping
-    if (useSigmaClipping) {
-        updateProgress(90, "Performing sigma clipping rejection...");
-        
-        // Process each pixel stack
-        #pragma omp parallel for
-        for (int y = 0; y < m_output_size.height; ++y) {
-            for (int x = 0; x < m_output_size.width; ++x) {
-                int idx = y * m_output_size.width + x;
-                cv::Mat& pixelStack = pixelStacks[idx];
-                cv::Mat& weightStack = weightStacks[idx];
-                
-                if (!pixelStack.empty()) {
-                    // Compute mean and standard deviation
-                    cv::Scalar mean, stddev;
-                    cv::meanStdDev(pixelStack, mean, stddev);
-                    
-                    float pixelMean = mean[0];
-                    float pixelStd = stddev[0];
-                    
-                    // Apply sigma clipping
-                    float lowThreshold = pixelMean - m_params.sigma_low * pixelStd;
-                    float highThreshold = pixelMean + m_params.sigma_high * pixelStd;
-                    
-                    float pixelSum = 0.0f;
-                    float weightSum = 0.0f;
-                    int validPixels = 0;
-                    
-                    for (int i = 0; i < pixelStack.rows; ++i) {
-                        float pixelValue = pixelStack.at<float>(i);
-                        float weight = weightStack.at<float>(i);
-                        
-                        if (pixelValue >= lowThreshold && pixelValue <= highThreshold) {
-                            pixelSum += pixelValue * weight;
-                            weightSum += weight;
-                            validPixels++;
-                        } else {
-                            #pragma omp atomic
-                            m_pixels_rejected++;
-                        }
-                    }
-                    
-                    if (weightSum > 0) {
-                        m_stacked_image.at<float>(y, x) = pixelSum / weightSum;
-                        m_weight_map.at<float>(y, x) = weightSum;
-                        m_overlap_map.at<uchar>(y, x) = validPixels;
-                    }
-                }
-            }
-        }
-        
-        logProcessing(QString("Sigma clipping completed: rejected %1 of %2 pixels (%3%)")
-                     .arg(m_pixels_rejected)
-                     .arg(m_pixels_processed)
-                     .arg(m_pixels_processed > 0 ? (m_pixels_rejected * 100.0 / m_pixels_processed) : 0.0, 0, 'f', 1));
-    } else {
-        // Step 3 (alternative): Normalize by weights for non-sigma-clipping methods
-        updateProgress(90, "Normalizing stacked image...");
-        
-        // Combine based on selected method
-        switch (m_params.combination) {
-            case StackingParams::WEIGHTED_MEAN:
-                // Already handled during stacking (weighted accumulation)
-                // Just need to normalize by total weight
-                for (int y = 0; y < m_output_size.height; ++y) {
-                    for (int x = 0; x < m_output_size.width; ++x) {
-                        if (m_weight_map.at<float>(y, x) > 0) {
-                            m_stacked_image.at<float>(y, x) /= m_weight_map.at<float>(y, x);
-                        }
-                    }
-                }
-                break;
-                
-            case StackingParams::MEDIAN:
-                // This would be handled differently - not implemented in this simplified version
-                // Would require storing all pixel values for each output pixel
-                logProcessing("Warning: Median stacking not fully implemented in this version");
-                break;
-                
-            default:
-                // Default to weighted mean
-                for (int y = 0; y < m_output_size.height; ++y) {
-                    for (int x = 0; x < m_output_size.width; ++x) {
-                        if (m_weight_map.at<float>(y, x) > 0) {
-                            m_stacked_image.at<float>(y, x) /= m_weight_map.at<float>(y, x);
-                        }
-                    }
-                }
-                break;
-        }
-    }
-    
-    // Step 4: Final post-processing
-    updateProgress(95, "Performing final image adjustments...");
-    
-    // Create a mask for pixels with no data
-    cv::Mat mask = (m_weight_map > 0);
-    
-    // Normalize image to [0, 1] range for display
-    double minVal, maxVal;
-    cv::minMaxLoc(m_stacked_image, &minVal, &maxVal, nullptr, nullptr, mask);
-    
-    // Log statistics
-    logProcessing(QString("Stacking complete - Image statistics: min=%1, max=%2, mean=%3")
-                 .arg(minVal, 0, 'f', 2)
-                 .arg(maxVal, 0, 'f', 2)
-                 .arg(cv::mean(m_stacked_image, mask)[0], 0, 'f', 2));
-    
-    // Optional: Stretch for better contrast
-    if (maxVal > minVal) {
-        logProcessing("Applying linear stretch for improved contrast");
-        cv::Mat temp;
-        m_stacked_image.copyTo(temp, mask);
-        temp = (temp - minVal) / (maxVal - minVal);
-        temp.copyTo(m_stacked_image, mask);
-    }
-    
-    // Create noise map if requested
-    if (m_params.create_weight_map) {
-        // Convert weight map to noise estimate (approximate)
-        m_noise_map = cv::Mat::zeros(m_output_size, CV_32F);
-        for (int y = 0; y < m_output_size.height; ++y) {
-            for (int x = 0; x < m_output_size.width; ++x) {
-                float weight = m_weight_map.at<float>(y, x);
-                if (weight > 0) {
-                    // Noise decreases with sqrt(N) where N is effective number of images
-                    m_noise_map.at<float>(y, x) = 1.0f / sqrt(weight);
-                }
-            }
-        }
-    }
-    
-    updateProgress(100, "Stacking successfully completed");
-    emit stackingComplete(true);
-    
-    return true;
-}
-
-/*
-* wcsinit() - Default constructor for the wcsprm struct
-* -----------------------------------------------------
-* wcsinit() optionally allocates memory for arrays in a wcsprm struct and sets
-* all members of the struct to default values.
-*
-* PLEASE NOTE: every wcsprm struct should be initialized by wcsinit(),
-* possibly repeatedly.  On the first invokation, and only the first
-* invokation, wcsprm::flag must be set to -1 to initialize memory management,
-* regardless of whether wcsinit() will actually be used to allocate memory.
-*
-* Given:
-*   alloc     int       If true, allocate memory unconditionally for the
-*                       crpix, etc. arrays.  Please note that memory is never
-*                       allocated by wcsinit() for the auxprm, tabprm, nor
-*                       wtbarr structs.
-*
-*                       If false, it is assumed that pointers to these arrays
-*                       have been set by the user except if they are null
-*                       pointers in which case memory will be allocated for
-*                       them regardless.  (In other words, setting alloc true
-*                       saves having to initalize these pointers to zero.)
-*
-*   naxis     int       The number of world coordinate axes.  This is used to
-*                       determine the length of the various wcsprm vectors and
-*                       matrices and therefore the amount of memory to
-*                       allocate for them.
-*
-* Given and returned:
-*   wcs       struct wcsprm*
-*                       Coordinate transformation parameters.
-*
-*                       Note that, in order to initialize memory management,
-*                       wcsprm::flag should be set to -1 when wcs is
-*                       initialized for the first time (memory leaks may
-*                       result if it had already been initialized).
-*
-* Given:
-*   npvmax    int       The number of PVi_ma keywords to allocate space for.
-*                       If set to -1, the value of the global variable NPVMAX
-*                       will be used.  This is potentially thread-unsafe if
-*                       wcsnpv() is being used dynamically to alter its value.
-*
-*   npsmax    int       The number of PSi_ma keywords to allocate space for.
-*                       If set to -1, the value of the global variable NPSMAX
-*                       will be used.  This is potentially thread-unsafe if
-*                       wcsnps() is being used dynamically to alter its value.
-*
-*   ndpmax    int       The number of DPja or DQia keywords to allocate space
-*                       for.  If set to -1, the value of the global variable
-*                       NDPMAX will be used.  This is potentially
-*                       thread-unsafe if disndp() is being used dynamically to
-*                       alter its value.
-*
-* Function return value:
-*             int       Status return value:
-*                         0: Success.
-*                         1: Null wcsprm pointer passed.
-*                         2: Memory allocation failed.
-*
-*                       For returns > 1, a detailed error message is set in
-*                       wcsprm::err if enabled, see wcserr_enable().
-*/
-int wcsinit(int alloc, int naxis, struct wcsprm *wcs, int npvmax, int npsmax,
-            int ndpmax);
-
-bool WCSAstrometricStacker::computeOptimalWCS() {
-    if (m_images.empty()) {
-        emit errorOccurred("No images available for WCS calculation");
-        return false;
-    }
-    
-    logProcessing("Computing optimal output WCS...");
-    
-    // Initialize WCS structure
-    int naxis = 2;
-    int status = wcsinit(true, naxis, &m_output_wcs, -1, -1, -1);
-    if (status) {
-        emit errorOccurred(QString("Failed to initialize WCS structure (error: %1)").arg(status));
-        return false;
-    }
-    
-    // Calculate bounding box in world coordinates
-    double ra_min = 360.0, ra_max = 0.0;
-    double dec_min = 90.0, dec_max = -90.0;
-    
-    // Use the first valid WCS as reference
-    struct wcsprm* ref_wcs = nullptr;
-    for (const auto& img : m_images) {
-        if (img->wcs_valid) {
-            ref_wcs = &img->wcs;
-            break;
-        }
-    }
-    
-    if (!ref_wcs) {
-        emit errorOccurred("No valid WCS found in any image");
-        return false;
-    }
-    
-    // For each image, find the corner points in world coordinates
-    for (const auto& img : m_images) {
-        if (!img->wcs_valid) continue;
-        wcsprm *wcs = &(img->wcs);
-
-        // Get image corners in pixel coordinates (1-indexed for WCSLIB)
-        double corners_pix[4][2] = {
-            {1.0, 1.0},  // Bottom left
-            {double(img->image.cols), 1.0},  // Bottom right
-            {1.0, double(img->image.rows)},  // Top left
-            {double(img->image.cols), double(img->image.rows)}  // Top right
-        };
-        
-        // Convert each corner to world coordinates
-        for (int i = 0; i < 4; ++i) {
-            double world[2] = {0.0, 0.0};
-	    double imgcrd[2] = {0.0, 0.0};  // Add missing intermediate coordinates
-            double phi = 0.0, theta = 0.0;
-            int stat[1] = {0};              // Add missing status array
-	    
-            if (wcsp2s(wcs, 1, 2, corners_pix[i], imgcrd, &phi, &theta, world, stat) == 0) {
-                // Handle RA wrapping at 0/360 degrees
-                if (i == 0) {
-                    ra_min = ra_max = world[0];
-                } else {
-                    // Check if we cross the RA=0/360 boundary
-                    if (std::abs(world[0] - ra_min) > 180.0) {
-                        if (world[0] < ra_min) world[0] += 360.0;
-                        else ra_min += 360.0;
-                    }
-                    if (std::abs(world[0] - ra_max) > 180.0) {
-                        if (world[0] < ra_max) world[0] += 360.0;
-                        else ra_max += 360.0;
-                    }
-                    
-                    ra_min = std::min(ra_min, world[0]);
-                    ra_max = std::max(ra_max, world[0]);
-                }
-                
-                dec_min = std::min(dec_min, world[1]);
-                dec_max = std::max(dec_max, world[1]);
-            }
-        }
-    }
-    
-    // Normalize RA range
-    while (ra_min >= 360.0) ra_min -= 360.0;
-    while (ra_max >= 360.0) ra_max -= 360.0;
-    
-    // Add margin
-    double ra_margin = (ra_max - ra_min) * 0.05;
-    double dec_margin = (dec_max - dec_min) * 0.05;
-    
-    ra_min = std::max(0.0, ra_min - ra_margin);
-    ra_max = std::min(360.0, ra_max + ra_margin);
-    dec_min = std::max(-90.0, dec_min - dec_margin);
-    dec_max = std::min(90.0, dec_max + dec_margin);
-    
-    // Determine pixel scale - use the first image as reference if not overridden
-    if (m_params.output_pixel_scale <= 0.0) {
-        // Calculate pixel scale from reference WCS
-        // For simplicity, estimate from CD matrix if available
-        if (ref_wcs->altlin & 2) { // Has PC and CDELT
-            m_output_pixel_scale = std::abs(ref_wcs->cdelt[0] * 3600.0); // Convert degrees to arcsec
-        } else if (ref_wcs->altlin & 4) { // Has CD
-            m_output_pixel_scale = std::sqrt(ref_wcs->cd[0] * ref_wcs->cd[0] + 
-                                           ref_wcs->cd[2] * ref_wcs->cd[2]) * 3600.0;
-        } else {
-            // Default for Stellina
-            m_output_pixel_scale = 1.25; // arcseconds per pixel
-        }
-    } else {
-        m_output_pixel_scale = m_params.output_pixel_scale;
-    }
-    
-    logProcessing(QString("Using output pixel scale: %1 arcsec/pixel").arg(m_output_pixel_scale, 0, 'f', 3));
-    
-    // Calculate output dimensions based on sky coverage and pixel scale
-    double ra_span_deg = ra_max - ra_min;
-    if (ra_span_deg < 0) ra_span_deg += 360.0;
-    
-    double dec_span_deg = dec_max - dec_min;
-    
-    // Convert to pixels using pixel scale
-    int width, height;
-    
-    // Adjust RA span for cos(Dec) factor at center declination
-    double dec_center = (dec_min + dec_max) / 2.0;
-    double cos_dec_factor = std::cos(dec_center * M_PI / 180.0);
-    if (cos_dec_factor < 0.01) cos_dec_factor = 0.01; // Avoid division by very small values
-    
-    width = int(ra_span_deg * 3600.0 / (m_output_pixel_scale * cos_dec_factor));
-    height = int(dec_span_deg * 3600.0 / m_output_pixel_scale);
-    
-    // Override dimensions if specified
-    if (m_params.output_width > 0) width = m_params.output_width;
-    if (m_params.output_height > 0) height = m_params.output_height;
-    
-    // Limit to reasonable size
-    width = std::min(std::max(width, 100), 10000);
-    height = std::min(std::max(height, 100), 10000);
-    
-    m_output_size = cv::Size(width, height);
-    
-    logProcessing(QString("Output dimensions: %1 x %2 pixels").arg(width).arg(height));
-    
-    // Initialize output WCS as TAN projection centered on field
-    double ra_center = (ra_min + ra_max) / 2.0;
-    if (ra_max < ra_min) ra_center = fmod(ra_center + 180.0, 360.0); // Handle RA wrap
-    
-    m_output_wcs.naxis = 2;
-    m_output_wcs.crpix[0] = width / 2.0 + 0.5;  // Center pixel X (1-indexed)
-    m_output_wcs.crpix[1] = height / 2.0 + 0.5; // Center pixel Y (1-indexed)
-    m_output_wcs.crval[0] = ra_center;          // RA at reference pixel
-    m_output_wcs.crval[1] = dec_center;         // Dec at reference pixel
-    m_output_wcs.cdelt[0] = -m_output_pixel_scale / 3600.0; // RA step (degrees)
-    m_output_wcs.cdelt[1] = m_output_pixel_scale / 3600.0;  // Dec step (degrees)
-    
-    // Set projection to TAN (tangent plane)
-    strncpy(m_output_wcs.ctype[0], "RA---TAN", 9);
-    strncpy(m_output_wcs.ctype[1], "DEC--TAN", 9);
-    
-    // Initialize PC matrix as identity
-    m_output_wcs.pc[0] = 1.0;
-    m_output_wcs.pc[1] = 0.0;
-    m_output_wcs.pc[2] = 0.0;
-    m_output_wcs.pc[3] = 1.0;
-    
-    // Set up the rest of the WCS structure
-    m_output_wcs.lonpole = 180.0;
-    m_output_wcs.latpole = 90.0;
-    m_output_wcs.restfrq = 0.0;
-    m_output_wcs.restwav = 0.0;
-    
-    // Set alt lin flags to indicate PC and CDELT are present
-    m_output_wcs.altlin = 2;
-    
-    // Set up the rest of the WCS struct that we need
-    m_output_wcs.flag = 0;
-    
-    // Set units to degrees
-    strncpy(m_output_wcs.cunit[0], "deg", 4);
-    strncpy(m_output_wcs.cunit[1], "deg", 4);
-    
-    // Initialize the WCS system
-    status = wcsset(&m_output_wcs);
-    if (status) {
-        emit errorOccurred(QString("Failed to set up WCS structure (error: %1)").arg(status));
-        return false;
-    }
-    
-    logProcessing(QString("Output WCS computed: center RA=%1°, Dec=%2°")
-                 .arg(ra_center, 0, 'f', 6)
-                 .arg(dec_center, 0, 'f', 6));
-    
-    return true;
-}
-
-bool WCSAstrometricStacker::saveResult(const QString &output_path) {
-    if (m_stacked_image.empty()) {
-        return false;
-    }
-    
-    updateProgress(0, "Saving result...");
-    
-    fitsfile *fptr = nullptr;
-    int status = 0;
-    
-    QByteArray pathBytes = QString("!%1").arg(output_path).toLocal8Bit();
-    if (fits_create_file(&fptr, pathBytes.data(), &status)) {
-        return false;
-    }
-    
-    long naxes[2] = {m_stacked_image.cols, m_stacked_image.rows};
-    if (fits_create_img(fptr, FLOAT_IMG, 2, naxes, &status)) {
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    // Convert OpenCV Mat to FITS format
-    long totalPixels = m_stacked_image.rows * m_stacked_image.cols;
-    std::vector<float> pixels(totalPixels);
-    
-    for (int y = 0; y < m_stacked_image.rows; ++y) {
-        for (int x = 0; x < m_stacked_image.cols; ++x) {
-            pixels[y * m_stacked_image.cols + x] = m_stacked_image.at<float>(y, x);
-        }
-    }
-    
-    if (fits_write_img(fptr, TFLOAT, 1, totalPixels, pixels.data(), &status)) {
-        fits_close_file(fptr, &status);
-        return false;
-    }
-    
-    // Write basic WCS keywords
-    fits_write_key(fptr, TDOUBLE, "CRVAL1", &m_output_wcs.crval[0], "Reference RA", &status);
-    fits_write_key(fptr, TDOUBLE, "CRVAL2", &m_output_wcs.crval[1], "Reference Dec", &status);
-    fits_write_key(fptr, TDOUBLE, "CRPIX1", &m_output_wcs.crpix[0], "Reference pixel X", &status);
-    fits_write_key(fptr, TDOUBLE, "CRPIX2", &m_output_wcs.crpix[1], "Reference pixel Y", &status);
-    
-    char ctype1[] = "RA---TAN";
-    char ctype2[] = "DEC--TAN";
-    char* ctype1_ptr = ctype1;
-    char* ctype2_ptr = ctype2;
-    fits_write_key(fptr, TSTRING, "CTYPE1", &ctype1_ptr, "Coordinate type", &status);
-    fits_write_key(fptr, TSTRING, "CTYPE2", &ctype2_ptr, "Coordinate type", &status);
-    
-    // Add processing information
-    int nimages = m_images.size();
-    fits_write_key(fptr, TINT, "NSTACKED", &nimages, "Number of stacked images", &status);
-    
-    fits_close_file(fptr, &status);
-    
-    updateProgress(100, "Save complete");
-    
-    return (status == 0);
-}
-
-void WCSAstrometricStacker::processNextImage() {
-    // This could be used for progressive processing if needed
-    // Currently the main stacking is done synchronously in stackImages()
-}
-
 void WCSAstrometricStacker::finishStacking() {
+    m_stacking_active = false;
     emit stackingComplete(true);
-    emit statusUpdated("Stacking completed successfully");
+    emit statusUpdated("TAN projection stacking completed successfully");
 }
 
-// MOC file will be automatically generated and linked by qmake

@@ -1,3 +1,6 @@
+// Replace the WCS-related parts in WcsAstrometricStacker.h
+// Updated header structure
+
 #ifndef WCS_ASTROMETRIC_STACKER_H
 #define WCS_ASTROMETRIC_STACKER_H
 
@@ -10,22 +13,37 @@
 #include <QTimer>
 #include <QStringList>
 #include <opencv2/opencv.hpp>
-#include <wcslib/wcs.h>
-#include <wcslib/wcshdr.h>
 #include <fitsio.h>
 #include <vector>
 #include <memory>
+#include <cmath>
 #include "StellinaProcessor.h"
 
 // Forward declarations
 struct StellinaImageData;
 struct StackingParams;
 
+// Simple TAN projection WCS implementation
+struct SimpleTANWCS {
+    double crval1, crval2;  // Reference RA, Dec (degrees)
+    double crpix1, crpix2;  // Reference pixels (1-indexed)
+    double cd11, cd12, cd21, cd22;  // CD matrix (degrees/pixel)
+    bool valid;
+    
+    SimpleTANWCS() : crval1(0), crval2(0), crpix1(0), crpix2(0),
+                     cd11(0), cd12(0), cd21(0), cd22(0), valid(false) {}
+    
+    bool pixelToWorld(double px, double py, double& ra, double& dec) const;
+    bool worldToPixel(double ra, double dec, double& px, double& py) const;
+    void printDiagnostics() const;
+    double getPixelScale() const; // Returns arcsec/pixel
+};
+
 // Enhanced image data structure for WCS stacking
 struct WCSImageData {
     cv::Mat image;                    // Image pixel data (32-bit float)
     cv::Mat weight_map;               // Quality weight map
-    struct wcsprm wcs;                // WCS coordinate system
+    SimpleTANWCS wcs;                 // Simple TAN WCS instead of wcsprm
     QString filename;                 // Original filename
     QString solved_filename;          // Plate-solved FITS file
     double quality_score;             // Overall quality (0-1)
@@ -42,14 +60,7 @@ struct WCSImageData {
     
     WCSImageData() : quality_score(1.0), exposure_time(10.0), star_count(0),
                     background_level(0.0), noise_level(0.0), wcs_valid(false),
-                    stellina_correction_magnitude(0.0), stellina_stars_used(0) {
-        // wcsini(1, 2, &wcs);  // Initialize WCS structure
-						memset(&wcs, 0, sizeof(wcs));
-    }
-    
-    ~WCSImageData() {
-        wcsfree(&wcs);  // Clean up WCS memory
-    }
+                    stellina_correction_magnitude(0.0), stellina_stars_used(0) {}
 };
 
 class WCSAstrometricStacker : public QObject {
@@ -78,7 +89,7 @@ public:
     cv::Mat getStackedImage() const { return m_stacked_image; }
     cv::Mat getWeightMap() const { return m_weight_map; }
     cv::Mat getOverlapMap() const { return m_overlap_map; }
-    struct wcsprm getOutputWCS() const { return m_output_wcs; }
+    SimpleTANWCS getOutputWCS() const { return m_output_wcs; }
     
     // Statistics
     int getImageCount() const { return m_images.size(); }
@@ -98,7 +109,7 @@ signals:
     void qualityAnalysisComplete();
 
 private slots:
-    void processNextImage();
+  //    void processNextImage();
 
 private:
     // Core processing functions
@@ -115,7 +126,7 @@ private:
     
     // Member variables
     std::vector<std::unique_ptr<WCSImageData>> m_images;
-    struct wcsprm m_output_wcs;       // Target WCS for output
+    SimpleTANWCS m_output_wcs;        // Target WCS for output
     cv::Size m_output_size;           // Output image dimensions
     double m_output_pixel_scale;      // Arcseconds per pixel
     
