@@ -20,8 +20,6 @@ void StellinaProcessor::connectSignals() {
             this, &StellinaProcessor::onClearLog);
     connect(m_refreshDarkButton, &QPushButton::clicked,
             this, &StellinaProcessor::onRefreshDarkFrames);
-    connect(m_previewStackButton, &QPushButton::clicked,
-            this, &StellinaProcessor::onPreviewStacking);
     
     // Processing mode combo
     connect(m_processingModeCombo, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
@@ -59,7 +57,8 @@ void StellinaProcessor::connectSignals() {
         m_exposureTolerance = value;
     });
     
-    // Stacking settings
+/*
+ // Stacking settings
     connect(m_stackingMethodCombo, &QComboBox::currentTextChanged, [this](const QString &text) {
         m_stackingParams.method = text;
         onStackingParametersChanged();
@@ -89,7 +88,7 @@ void StellinaProcessor::connectSignals() {
         m_stackingParams.outputFormat = text;
         onStackingParametersChanged();
     });
-
+*/
     // Mount tilt correction signals
     if (m_enableTiltCorrectionCheck) {
         connect(m_enableTiltCorrectionCheck, &QCheckBox::toggled, [this](bool checked) {
@@ -263,7 +262,7 @@ void StellinaProcessor::onRefreshDarkFrames() {
         scanDarkFrames();
     }
 }
-
+/*
 void StellinaProcessor::onPreviewStacking() {
     if (m_imagesToProcess.isEmpty()) {
         if (!findStellinaImages()) {
@@ -307,25 +306,28 @@ void StellinaProcessor::onPreviewStacking() {
     }
 }
 
-void StellinaProcessor::onStackingParametersChanged() {
+ void StellinaProcessor::onStackingParametersChanged() {
     // This function is called when stacking parameters change
     // Update the internal stacking parameters structure
-    m_stackingParams.method = m_stackingMethodCombo->currentText();
-//    m_stackingParams.rejection = m_rejectionMethodCombo->currentText();
-    m_stackingParams.rejectionLow = m_rejectionLowSpin->value();
-    m_stackingParams.rejectionHigh = m_rejectionHighSpin->value();
-    m_stackingParams.normalizeImages = m_normalizeCheck->isChecked();
-    m_stackingParams.applyDrizzle = m_drizzleCheck->isChecked();
-    m_stackingParams.drizzleScale = m_drizzleScaleSpin->value();
-    m_stackingParams.outputFormat = m_outputFormatCombo->currentText();
-    
-    if (m_debugMode) {
-        logMessage(QString("Stacking parameters updated: method=%1, rejection=%2")
-                      .arg(m_stackingParams.method)
-                      .arg(m_stackingParams.rejection), "gray");
-    }
+    /*
+     m_stackingParams.method = m_stackingMethodCombo->currentText();
+     m_stackingParams.rejection = m_rejectionMethodCombo->currentText();
+     m_stackingParams.rejectionLow = m_rejectionLowSpin->value();
+     m_stackingParams.rejectionHigh = m_rejectionHighSpin->value();
+     m_stackingParams.normalizeImages = m_normalizeCheck->isChecked();
+     m_stackingParams.applyDrizzle = m_drizzleCheck->isChecked();
+     m_stackingParams.drizzleScale = m_drizzleScaleSpin->value();
+     m_stackingParams.outputFormat = m_outputFormatCombo->currentText();
+     
+     if (m_debugMode) {
+     logMessage(QString("Stacking parameters updated: method=%1, rejection=%2")
+     .arg(m_stackingParams.method)
+     .arg(m_stackingParams.rejection), "gray");
+     }
+     
 }
-
+*/
+    
 // Siril Event Handlers
 void StellinaProcessor::onSirilConnected() {
     logMessage("Connected to Siril successfully!", "green");
@@ -379,7 +381,7 @@ void StellinaProcessor::updateUI() {
     
     m_startButton->setEnabled(canProcess);
     m_stopButton->setEnabled(m_processing);
-    m_previewStackButton->setEnabled(canProcess && (m_processingMode == MODE_ASTROMETRIC_STACKING || m_processingMode == MODE_FULL_PIPELINE));
+//    m_previewStackButton->setEnabled(canProcess && (m_processingMode == MODE_ASTROMETRIC_STACKING || m_processingMode == MODE_FULL_PIPELINE));
     
     updateConnectionStatus();
     updateWCSUI();

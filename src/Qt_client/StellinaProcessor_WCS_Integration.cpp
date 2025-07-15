@@ -247,7 +247,7 @@ void StellinaProcessor::onStartWCSStacking() {
             }
         } else {
             // If no StellinaImageData found, try loading just the FITS file
-            if ((successfullyLoaded < 10) && m_wcsStacker->addImage(fullPath)) {
+            if (m_wcsStacker->addImage(fullPath)) {
                 successfullyLoaded++;
             }
         }

@@ -290,7 +290,7 @@ void StellinaProcessor::setupDarkTab() {
 
 void StellinaProcessor::setupStackingTab() {
     QVBoxLayout *layout = new QVBoxLayout(m_stackingTab);
-    
+/*
     // Stacking options group
     m_stackingOptionsGroup = new QGroupBox("Astrometric Stacking Settings");
     QGridLayout *stackingLayout = new QGridLayout(m_stackingOptionsGroup);
@@ -347,6 +347,7 @@ void StellinaProcessor::setupStackingTab() {
     stackingLayout->addLayout(previewLayout, 8, 0, 1, 2);
     
     layout->addWidget(m_stackingOptionsGroup);
+ */
     setupWCSStackingUI();
     layout->addStretch();
 }

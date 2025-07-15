@@ -69,12 +69,14 @@ struct StackingParams {
     double percentile_high = 95.0;    // High percentile (%)
     bool normalize_exposure = true;   // Normalize by exposure time
     bool apply_flat_correction = false; // Apply flat field correction
+    bool apply_brightness_normalization = false; // Apply brightness normalisation
     double output_pixel_scale = 0.0;  // Override pixel scale (0 = auto)
     int output_width = 0;             // Override width (0 = auto)
     int output_height = 0;            // Override height (0 = auto)
     bool create_weight_map = true;    // Generate output weight map
     bool save_intermediate = false;   // Save reprojected images
     QString output_format = "fits";   // Output format
+  /*
     QString method;           // "sum", "median", "mean", "sigma_clipping"
     double rejectionLow;      // lower rejection threshold
     double rejectionHigh;     // upper rejection threshold
@@ -82,6 +84,7 @@ struct StackingParams {
     bool applyDrizzle;        // apply drizzle enhancement
     double drizzleScale;      // drizzle scale factor
     QString outputFormat;     // "fits", "tiff", "png"
+  */
 };
 
 // Dark frame information
@@ -202,8 +205,8 @@ private slots:
     void onClearLog();
     void onProcessingModeChanged();
     void onRefreshDarkFrames();
-    void onStackingParametersChanged();
-    void onPreviewStacking();
+//    void onStackingParametersChanged();
+//    void onPreviewStacking();
     
     // Siril connection slots
     void onSirilConnected();
@@ -396,7 +399,8 @@ private:
     QSpinBox *m_exposureToleranceSpin;
     QTableWidget *m_darkFramesTable;
     
-    // Stacking options group
+/*
+	// Stacking options group
     QGroupBox *m_stackingOptionsGroup;
     QComboBox *m_stackingMethodCombo;
     QComboBox *m_rejectionMethodCombo;
@@ -407,7 +411,7 @@ private:
     QDoubleSpinBox *m_drizzleScaleSpin;
     QComboBox *m_outputFormatCombo;
     QPushButton *m_previewStackButton;
-    
+*/
     // Processing group
     QGroupBox *m_processingGroup;
     QPushButton *m_startButton;

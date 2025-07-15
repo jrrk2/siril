@@ -63,6 +63,16 @@ struct WCSImageData {
                     stellina_correction_magnitude(0.0), stellina_stars_used(0) {}
 };
 
+// Structure to hold pixel contributions for each target location
+struct PixelContribution {
+    float value;
+    float weight;
+    size_t source_image_index;
+    
+    PixelContribution(float v, float w, size_t idx) 
+        : value(v), weight(w), source_image_index(idx) {}
+};
+
 class WCSAstrometricStacker : public QObject {
     Q_OBJECT
 
@@ -119,7 +129,11 @@ private:
     bool addPlatesolveDFITSFile(const QString &solved_fits_file);
     bool addImageFromStellinaData(const QString &fits_file, const StellinaImageData &stellina_data);
     void saveOverlapMap(const cv::Mat& overlap_count, const QString& output_path);
-    void analyzeOverlapDistribution(const cv::Mat& overlap_count);  
+    void analyzeOverlapDistribution(const cv::Mat& overlap_count);
+    void logOverlapStatistics() ;
+    void applyGlobalBrightnessNormalization() ;
+    void applySigmaClipping(std::vector<PixelContribution>& contributions, int x, int y) ;
+  
     // Utility functions
     void updateProgress(int percentage, const QString &message);
     void logProcessing(const QString &message);
