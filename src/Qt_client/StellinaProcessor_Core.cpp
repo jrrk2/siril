@@ -75,7 +75,8 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
     updateUI();
     loadSettings();
     testLibnovaConversion();
- 
+    initializeWCSStacker();
+
     logMessage("Enhanced Stellina Processor started. Connect to Siril and select processing mode.", "blue");
     
     // Scan for dark frames if directory is set
@@ -935,6 +936,7 @@ void StellinaProcessor::loadSettings() {
     m_northTiltSpin->setValue(m_mountTilt.northTilt);
     m_eastTiltSpin->setValue(m_mountTilt.eastTilt);
     updateTiltUI();
+    loadWCSSettings();
 }
 
 void StellinaProcessor::saveSettings() {
@@ -949,6 +951,7 @@ void StellinaProcessor::saveSettings() {
     settings.setValue("pixelSize", m_pixelSize);
     settings.setValue("observerLocation", m_observerLocation);
     settings.setValue("processingMode", static_cast<int>(m_processingMode));
+    saveWCSSettings();
 }
 
 QString StellinaProcessor::getOutputDirectoryForCurrentStage() const {

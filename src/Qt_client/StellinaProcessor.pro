@@ -80,6 +80,9 @@ macx {
     # For distribution
     # QMAKE_POST_LINK += macdeployqt $$OUT_PWD/$${TARGET}.app
     INCLUDEPATH += /opt/homebrew/include
+    INCLUDEPATH += /opt/homebrew/include/opencv4
+    INCLUDEPATH += /opt/homebrew/include/wcslib
+    INCLUDEPATH += /opt/homebrew/Cellar/opencv/4.11.0_1/include/opencv4
     LIBS += -L/opt/homebrew/lib -lnova
     }
 

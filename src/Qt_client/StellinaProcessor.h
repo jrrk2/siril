@@ -27,9 +27,15 @@
 #include <QSplitter>
 #include <QElapsedTimer>
 #include <QProcessEnvironment>
-
-// cfitsio is required for Siril, so we can assume it's available
 #include <fitsio.h>
+// #include "WcsAstrometricStacker.h"  // Add this include
+
+//============================================================================
+// 2. ADD THESE FORWARD DECLARATIONS (if not already present)
+//============================================================================
+
+class WCSAstrometricStacker;
+struct WCSStackingParams;
 
 // Processing modes
 enum ProcessingMode {
@@ -37,6 +43,39 @@ enum ProcessingMode {
     MODE_DARK_CALIBRATION = 1,
     MODE_ASTROMETRIC_STACKING = 2,
     MODE_FULL_PIPELINE = 3
+};
+
+// Stacking parameters
+struct StackingParams {
+    enum CombinationMethod {
+        MEAN,
+        MEDIAN, 
+        WEIGHTED_MEAN,
+        SIGMA_CLIPPED_MEAN,
+        MINIMUM,
+        MAXIMUM
+    };
+    
+    enum RejectionMethod {
+        NO_REJECTION,
+        SIGMA_CLIPPING,
+        PERCENTILE_CLIPPING,
+        LINEAR_FIT_CLIPPING
+    };
+    
+    CombinationMethod combination = WEIGHTED_MEAN;
+    RejectionMethod rejection = SIGMA_CLIPPING;
+    double sigma_low = 3.0;           // Low sigma clipping threshold
+    double sigma_high = 3.0;          // High sigma clipping threshold
+    double percentile_low = 5.0;      // Low percentile (%)
+    double percentile_high = 95.0;    // High percentile (%)
+    bool normalize_exposure = true;   // Normalize by exposure time
+    bool apply_flat_correction = false; // Apply flat field correction
+    double output_pixel_scale = 0.0;  // Override pixel scale (0 = auto)
+    int output_width = 0;             // Override width (0 = auto)
+    int output_height = 0;            // Override height (0 = auto)
+    bool create_weight_map = true;    // Generate output weight map
+    bool save_intermediate = false;   // Save reprojected images
 };
 
 // Dark frame information
@@ -48,7 +87,7 @@ struct DarkFrame {
 };
 
 // Stacking parameters
-struct StackingParams {
+struct WCSStackingParams {
     QString method;           // "sum", "median", "mean", "sigma_clipping"
     QString rejection;        // "none", "sigma", "linear", "percentile"
     double rejectionLow;      // lower rejection threshold
@@ -191,6 +230,12 @@ private slots:
 
     void analyzeMosaicCorrections(const QList<StackingCorrectionData> &stackingData,
 				  const QMap<QString, int> &patternCount);
+    void onWCSParametersChanged();
+    void onStartWCSStacking();
+    void onWCSStackingComplete(bool success);
+    void onWCSProgressUpdated(int percentage);
+    void onWCSStatusUpdated(const QString &message);
+    void onSaveWCSResult();
   
 private:
 
@@ -308,6 +353,15 @@ void updateTiltUI();
 			   long width, long height, long &binnedWidth, long &binnedHeight);
     QProcessEnvironment createSolveFieldEnvironment();
     QStringList getAstrometryPaths();
+    void initializeWCSStacker();
+    void setupWCSStackingUI();
+    void addWCSMenuItems();
+    void updateWCSUI();
+    void loadWCSSettings();
+    void saveWCSSettings();
+    
+    // Enhanced processing methods
+    bool performAstrometricStackingEnhanced();
 
     // UI components - Main tabs
     QTabWidget *m_tabWidget;
@@ -402,6 +456,23 @@ void updateTiltUI();
     QDoubleSpinBox *m_driftRASpin;
     QDoubleSpinBox *m_driftDecSpin;
     QLabel *m_driftStatusLabel;
+    // WCS Astrometric Stacker
+    WCSAstrometricStacker *m_wcsStacker;
+    WCSStackingParams m_wcsStackingParams;
+    
+    // WCS Stacking UI elements
+    QGroupBox *m_wcsStackingGroup;
+    QComboBox *m_wcsCombinationMethodCombo;
+    QComboBox *m_wcsRejectionMethodCombo;
+    QDoubleSpinBox *m_wcsSigmaLowSpin;
+    QDoubleSpinBox *m_wcsSigmaHighSpin;
+    QCheckBox *m_wcsNormalizeExposureCheck;
+    QCheckBox *m_wcsCreateWeightMapCheck;
+    QSpinBox *m_wcsOutputWidthSpin;
+    QSpinBox *m_wcsOutputHeightSpin;
+    QDoubleSpinBox *m_wcsOutputPixelScaleSpin;
+    QPushButton *m_startWCSStackingButton;
+    QPushButton *m_saveWCSResultButton;
   
     // Status bar
     QLabel *m_statusLabel;
@@ -451,7 +522,7 @@ void updateTiltUI();
     int m_exposureTolerance;
     
     // Stacking settings
-    StackingParams m_stackingParams;
+    WCSStackingParams m_stackingParams;
     
     // File tracking for pipeline
     QStringList m_darkCalibratedFiles;

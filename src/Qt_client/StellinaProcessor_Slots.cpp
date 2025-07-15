@@ -363,6 +363,8 @@ void StellinaProcessor::updateUI() {
     m_previewStackButton->setEnabled(canProcess && (m_processingMode == MODE_ASTROMETRIC_STACKING || m_processingMode == MODE_FULL_PIPELINE));
     
     updateConnectionStatus();
+    updateWCSUI();
+    
 }
 
 // Update UI to show connection type

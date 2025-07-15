@@ -264,7 +264,7 @@ void StellinaProcessor::handlePipelineStageTransition() {
         logMessage("Plate solving stage complete, setting up astrometric stacking...", "blue");
         if (setupStackingStage()) {
             m_currentStage = STAGE_REGISTRATION;
-            if (performAstrometricStacking()) {
+            if (performAstrometricStackingEnhanced()) {
                 m_currentStage = STAGE_COMPLETE;
                 finishProcessing();
             } else {

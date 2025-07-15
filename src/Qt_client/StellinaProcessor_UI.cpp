@@ -347,6 +347,7 @@ void StellinaProcessor::setupStackingTab() {
     stackingLayout->addLayout(previewLayout, 8, 0, 1, 2);
     
     layout->addWidget(m_stackingOptionsGroup);
+    setupWCSStackingUI();
     layout->addStretch();
 }
 
@@ -397,6 +398,7 @@ void StellinaProcessor::setupMenu() {
     // Tools menu
     QMenu *toolsMenu = menuBar->addMenu("&Tools");
     toolsMenu->addAction("&Refresh Dark Frames", this, &StellinaProcessor::onRefreshDarkFrames);
+    addWCSMenuItems();
     toolsMenu->addSeparator();
 
     // Enhanced Mount tilt submenu
