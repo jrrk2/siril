@@ -290,64 +290,6 @@ void StellinaProcessor::setupDarkTab() {
 
 void StellinaProcessor::setupStackingTab() {
     QVBoxLayout *layout = new QVBoxLayout(m_stackingTab);
-/*
-    // Stacking options group
-    m_stackingOptionsGroup = new QGroupBox("Astrometric Stacking Settings");
-    QGridLayout *stackingLayout = new QGridLayout(m_stackingOptionsGroup);
-    
-    stackingLayout->addWidget(new QLabel("Stacking Method:"), 0, 0);
-    m_stackingMethodCombo = new QComboBox;
-    m_stackingMethodCombo->addItems({"median", "mean", "sum", "sigma_clipping"});
-    stackingLayout->addWidget(m_stackingMethodCombo, 0, 1);
-    
-    stackingLayout->addWidget(new QLabel("Rejection Method:"), 1, 0);
-    m_rejectionMethodCombo = new QComboBox;
-    m_rejectionMethodCombo->addItems({"none", "sigma", "linear", "percentile"});
-    m_rejectionMethodCombo->setCurrentText("sigma");
-    stackingLayout->addWidget(m_rejectionMethodCombo, 1, 1);
-    
-    stackingLayout->addWidget(new QLabel("Low Rejection:"), 2, 0);
-    m_rejectionLowSpin = new QDoubleSpinBox;
-    m_rejectionLowSpin->setRange(0.1, 10.0);
-    m_rejectionLowSpin->setValue(3.0);
-    m_rejectionLowSpin->setDecimals(1);
-    stackingLayout->addWidget(m_rejectionLowSpin, 2, 1);
-    
-    stackingLayout->addWidget(new QLabel("High Rejection:"), 3, 0);
-    m_rejectionHighSpin = new QDoubleSpinBox;
-    m_rejectionHighSpin->setRange(0.1, 10.0);
-    m_rejectionHighSpin->setValue(3.0);
-    m_rejectionHighSpin->setDecimals(1);
-    stackingLayout->addWidget(m_rejectionHighSpin, 3, 1);
-    
-    m_normalizeCheck = new QCheckBox("Normalize images before stacking");
-    m_normalizeCheck->setChecked(true);
-    stackingLayout->addWidget(m_normalizeCheck, 4, 0, 1, 2);
-    
-    m_drizzleCheck = new QCheckBox("Apply drizzle enhancement");
-    stackingLayout->addWidget(m_drizzleCheck, 5, 0, 1, 2);
-    
-    stackingLayout->addWidget(new QLabel("Drizzle Scale:"), 6, 0);
-    m_drizzleScaleSpin = new QDoubleSpinBox;
-    m_drizzleScaleSpin->setRange(1.0, 3.0);
-    m_drizzleScaleSpin->setValue(1.5);
-    m_drizzleScaleSpin->setDecimals(1);
-    m_drizzleScaleSpin->setEnabled(false);
-    stackingLayout->addWidget(m_drizzleScaleSpin, 6, 1);
-    
-    stackingLayout->addWidget(new QLabel("Output Format:"), 7, 0);
-    m_outputFormatCombo = new QComboBox;
-    m_outputFormatCombo->addItems({"fits", "tiff", "png"});
-    stackingLayout->addWidget(m_outputFormatCombo, 7, 1);
-    
-    QHBoxLayout *previewLayout = new QHBoxLayout;
-    m_previewStackButton = new QPushButton("Preview Stack (First 5 Images)");
-    previewLayout->addWidget(m_previewStackButton);
-    previewLayout->addStretch();
-    stackingLayout->addLayout(previewLayout, 8, 0, 1, 2);
-    
-    layout->addWidget(m_stackingOptionsGroup);
- */
     setupWCSStackingUI();
     layout->addStretch();
 }
@@ -404,12 +346,7 @@ void StellinaProcessor::setupMenu() {
 
     // Enhanced Mount tilt submenu
     QMenu *tiltMenu = toolsMenu->addMenu("Mount &Tilt");
-    /*
-    tiltMenu->addAction("&Enhanced Calibration (with Drift)", this, &StellinaProcessor::calibrateMountWithDrift);
-    tiltMenu->addSeparator();
-    tiltMenu->addAction("&Basic Auto-Calibrate", this, &StellinaProcessor::autoCalibrateTiltFromSolveResults);
-    tiltMenu->addAction("&Fine-Tune Parameters", this, &StellinaProcessor::fineTuneMountTilt);
-     */
+
     tiltMenu->addSeparator();
     tiltMenu->addAction("&Test Tilt Correction", this, &StellinaProcessor::testMountTiltCorrection);
     tiltMenu->addAction("&Manual Calibrate", this, &StellinaProcessor::calibrateMountTilt);

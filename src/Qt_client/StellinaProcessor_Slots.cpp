@@ -57,38 +57,6 @@ void StellinaProcessor::connectSignals() {
         m_exposureTolerance = value;
     });
     
-/*
- // Stacking settings
-    connect(m_stackingMethodCombo, &QComboBox::currentTextChanged, [this](const QString &text) {
-        m_stackingParams.method = text;
-        onStackingParametersChanged();
-    });
-    connect(m_rejectionLowSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), [this](double value) {
-        m_stackingParams.rejectionLow = value;
-        onStackingParametersChanged();
-    });
-    connect(m_rejectionHighSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), [this](double value) {
-        m_stackingParams.rejectionHigh = value;
-        onStackingParametersChanged();
-    });
-    connect(m_normalizeCheck, &QCheckBox::toggled, [this](bool checked) {
-        m_stackingParams.normalizeImages = checked;
-        onStackingParametersChanged();
-    });
-    connect(m_drizzleCheck, &QCheckBox::toggled, [this](bool checked) {
-        m_stackingParams.applyDrizzle = checked;
-        m_drizzleScaleSpin->setEnabled(checked);
-        onStackingParametersChanged();
-    });
-    connect(m_drizzleScaleSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), [this](double value) {
-        m_stackingParams.drizzleScale = value;
-        onStackingParametersChanged();
-    });
-    connect(m_outputFormatCombo, &QComboBox::currentTextChanged, [this](const QString &text) {
-        m_stackingParams.outputFormat = text;
-        onStackingParametersChanged();
-    });
-*/
     // Mount tilt correction signals
     if (m_enableTiltCorrectionCheck) {
         connect(m_enableTiltCorrectionCheck, &QCheckBox::toggled, [this](bool checked) {
@@ -262,71 +230,6 @@ void StellinaProcessor::onRefreshDarkFrames() {
         scanDarkFrames();
     }
 }
-/*
-void StellinaProcessor::onPreviewStacking() {
-    if (m_imagesToProcess.isEmpty()) {
-        if (!findStellinaImages()) {
-            QMessageBox::warning(this, "No Images", "No valid Stellina images found for preview.");
-            return;
-        }
-    }
-    
-    if (m_imagesToProcess.size() < 3) {
-        QMessageBox::warning(this, "Insufficient Images", "Need at least 3 images for preview stacking.");
-        return;
-    }
-    
-    // Take first 5 images for preview
-    QStringList previewImages = m_imagesToProcess.mid(0, qMin(5, m_imagesToProcess.size()));
-    
-    logMessage(QString("Creating preview stack with %1 images...").arg(previewImages.size()), "blue");
-    
-    // Create a temporary sequence for preview
-    QString previewSequence = "preview_stack";
-    if (createSequence(previewImages, previewSequence)) {
-        if (performGlobalRegistration(previewSequence)) {
-            // Convert WCSStackingParams to StackingParams for the preview
-            StackingParams previewParams;
-            previewParams.combination = StackingParams::WEIGHTED_MEAN;
-            previewParams.rejection = StackingParams::SIGMA_CLIPPING;
-            previewParams.sigma_low = m_stackingParams.rejectionLow;
-            previewParams.sigma_high = m_stackingParams.rejectionHigh;
-            previewParams.normalize_exposure = m_stackingParams.normalizeImages;
-            
-            if (performStacking(previewSequence, previewParams)) {
-                logMessage("Preview stack created successfully! Check output directory.", "green");
-            } else {
-                logMessage("Preview stacking failed.", "red");
-            }
-        } else {
-            logMessage("Preview registration failed.", "red");
-        }
-    } else {
-        logMessage("Failed to create preview sequence.", "red");
-    }
-}
-
- void StellinaProcessor::onStackingParametersChanged() {
-    // This function is called when stacking parameters change
-    // Update the internal stacking parameters structure
-    /*
-     m_stackingParams.method = m_stackingMethodCombo->currentText();
-     m_stackingParams.rejection = m_rejectionMethodCombo->currentText();
-     m_stackingParams.rejectionLow = m_rejectionLowSpin->value();
-     m_stackingParams.rejectionHigh = m_rejectionHighSpin->value();
-     m_stackingParams.normalizeImages = m_normalizeCheck->isChecked();
-     m_stackingParams.applyDrizzle = m_drizzleCheck->isChecked();
-     m_stackingParams.drizzleScale = m_drizzleScaleSpin->value();
-     m_stackingParams.outputFormat = m_outputFormatCombo->currentText();
-     
-     if (m_debugMode) {
-     logMessage(QString("Stacking parameters updated: method=%1, rejection=%2")
-     .arg(m_stackingParams.method)
-     .arg(m_stackingParams.rejection), "gray");
-     }
-     
-}
-*/
     
 // Siril Event Handlers
 void StellinaProcessor::onSirilConnected() {

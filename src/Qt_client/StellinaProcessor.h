@@ -76,15 +76,6 @@ struct StackingParams {
     bool create_weight_map = true;    // Generate output weight map
     bool save_intermediate = false;   // Save reprojected images
     QString output_format = "fits";   // Output format
-  /*
-    QString method;           // "sum", "median", "mean", "sigma_clipping"
-    double rejectionLow;      // lower rejection threshold
-    double rejectionHigh;     // upper rejection threshold
-    bool normalizeImages;     // normalize before stacking
-    bool applyDrizzle;        // apply drizzle enhancement
-    double drizzleScale;      // drizzle scale factor
-    QString outputFormat;     // "fits", "tiff", "png"
-  */
 };
 
 // Dark frame information
@@ -398,20 +389,6 @@ private:
     QSpinBox *m_temperatureToleranceSpin;
     QSpinBox *m_exposureToleranceSpin;
     QTableWidget *m_darkFramesTable;
-    
-/*
-	// Stacking options group
-    QGroupBox *m_stackingOptionsGroup;
-    QComboBox *m_stackingMethodCombo;
-    QComboBox *m_rejectionMethodCombo;
-    QDoubleSpinBox *m_rejectionLowSpin;
-    QDoubleSpinBox *m_rejectionHighSpin;
-    QCheckBox *m_normalizeCheck;
-    QCheckBox *m_drizzleCheck;
-    QDoubleSpinBox *m_drizzleScaleSpin;
-    QComboBox *m_outputFormatCombo;
-    QPushButton *m_previewStackButton;
-*/
     // Processing group
     QGroupBox *m_processingGroup;
     QPushButton *m_startButton;

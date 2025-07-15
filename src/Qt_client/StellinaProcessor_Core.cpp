@@ -54,17 +54,6 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
 {
     setWindowTitle("Enhanced Stellina Processor for Siril - v2.0");
     setMinimumSize(1000, 800);
-/*
-    // Initialize stacking parameters
-    m_stackingParams.method = "median";
-    m_stackingParams.rejection = StackingParams::SIGMA_CLIPPING;
-    m_stackingParams.rejectionLow = 3.0;
-    m_stackingParams.rejectionHigh = 3.0;
-    m_stackingParams.normalizeImages = true;
-    m_stackingParams.applyDrizzle = false;
-    m_stackingParams.drizzleScale = 1.5;
-    m_stackingParams.outputFormat = "fits";
-*/
     // Setup timer
     m_processingTimer->setSingleShot(false);
     m_processingTimer->setInterval(2000);
@@ -1620,32 +1609,7 @@ bool StellinaProcessor::performGlobalRegistration(const QString &sequenceName) {
     logMessage("Global registration completed", "green");
     return true;
 }
-/*
-bool StellinaProcessor::performStacking(const QString &sequenceName, const StackingParams &params) {
-    logMessage(QString("Performing stacking with method: %1").arg(params.method), "blue");
-    m_stackingStatusLabel->setText("Stacking: In Progress");
-    
-    // Build stacking command
-    QString command = QString("stack pp_%1 rej %2 %3 %4 -norm=%5")
-                         .arg(sequenceName)
-                         .arg(params.rejection)
-                         .arg(params.rejectionLow)
-                         .arg(params.rejectionHigh)
-                         .arg(params.normalizeImages ? "additive" : "none");
-    
-    if (params.method != "sum") {
-        command += QString(" -type=%1").arg(params.method);
-    }
-    
-    if (params.applyDrizzle) {
-        command += QString(" -drizzle -scale=%1").arg(params.drizzleScale);
-    }
-    
-    QString outputDir = getOutputDirectoryForCurrentStage();
-    m_stackingStatusLabel->setText("Stacking: Complete");
-    return true;
-}
-*/
+
 bool StellinaProcessor::performAstrometricStacking() {
     if (m_plateSolvedFiles.isEmpty()) {
         logMessage("No plate-solved images available for stacking", "red");
@@ -1852,17 +1816,6 @@ void StellinaProcessor::saveProcessingReport() {
     out << "- Dark calibrated: " << m_darkCalibratedCount << "\n";
     out << "- Errors: " << m_errorCount << "\n";
     out << "- Skipped: " << m_skippedCount << "\n\n";
-/*
-    if (m_processingMode == MODE_ASTROMETRIC_STACKING || m_processingMode == MODE_FULL_PIPELINE) {
-        out << "Stacking Parameters:\n";
-        out << "- Method: " << m_stackingParams.method << "\n";
-        out << "- Rejection: " << m_stackingParams.rejection << "\n";
-        out << "- Rejection thresholds: " << m_stackingParams.rejectionLow << " / " << m_stackingParams.rejectionHigh << "\n";
-        out << "- Normalization: " << (m_stackingParams.normalizeImages ? "Yes" : "No") << "\n";
-        out << "- Drizzle: " << (m_stackingParams.applyDrizzle ? QString("Yes (scale: %1)").arg(m_stackingParams.drizzleScale) : "No") << "\n";
-        out << "- Output format: " << m_stackingParams.outputFormat << "\n\n";
-    }
-*/
     if (!m_finalStackedImage.isEmpty()) {
         out << "Final stacked image: " << m_finalStackedImage << "\n\n";
     }
