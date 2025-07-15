@@ -28,14 +28,12 @@
 #include <QElapsedTimer>
 #include <QProcessEnvironment>
 #include <fitsio.h>
-// #include "WcsAstrometricStacker.h"  // Add this include
 
 //============================================================================
 // 2. ADD THESE FORWARD DECLARATIONS (if not already present)
 //============================================================================
 
 class WCSAstrometricStacker;
-struct WCSStackingParams;
 
 // Processing modes
 enum ProcessingMode {
@@ -45,7 +43,7 @@ enum ProcessingMode {
     MODE_FULL_PIPELINE = 3
 };
 
-// Stacking parameters
+// Stacking parameters - unified structure for both WCS and traditional stacking
 struct StackingParams {
     enum CombinationMethod {
         MEAN,
@@ -76,6 +74,14 @@ struct StackingParams {
     int output_height = 0;            // Override height (0 = auto)
     bool create_weight_map = true;    // Generate output weight map
     bool save_intermediate = false;   // Save reprojected images
+    QString output_format = "fits";   // Output format
+    QString method;           // "sum", "median", "mean", "sigma_clipping"
+    double rejectionLow;      // lower rejection threshold
+    double rejectionHigh;     // upper rejection threshold
+    bool normalizeImages;     // normalize before stacking
+    bool applyDrizzle;        // apply drizzle enhancement
+    double drizzleScale;      // drizzle scale factor
+    QString outputFormat;     // "fits", "tiff", "png"
 };
 
 // Dark frame information
@@ -86,20 +92,7 @@ struct DarkFrame {
     QString binning;  // binning mode (e.g., "1x1", "2x2")
 };
 
-// Stacking parameters
-struct WCSStackingParams {
-    QString method;           // "sum", "median", "mean", "sigma_clipping"
-    QString rejection;        // "none", "sigma", "linear", "percentile"
-    double rejectionLow;      // lower rejection threshold
-    double rejectionHigh;     // upper rejection threshold
-    bool normalizeImages;     // normalize before stacking
-    bool applyDrizzle;        // apply drizzle enhancement
-    double drizzleScale;      // drizzle scale factor
-    QString outputFormat;     // "fits", "tiff", "png"
-};
-// Update the StellinaImageData structure in StellinaProcessor.h
-// Replace the existing struct with this enhanced version:
-
+// Update the StellinaImageData structure
 struct StellinaImageData {
     QString originalFitsPath;     // Original raw FITS file path
     QString originalJsonPath;     // Original JSON metadata file path  
@@ -127,8 +120,6 @@ struct StellinaImageData {
         return hasCalculatedCoords && calculatedRA != 0.0 && calculatedDec != 0.0;
     }
 };
-
-// Add these functions to StellinaProcessor_Core.cpp for fast mount calibration
 
 struct StackingCorrectionData {
     QString imageFilename;
@@ -180,25 +171,24 @@ public:
     void analyzeRealCoordinateErrors();
     bool processImagePlatesolving_Fixed(const QString &calibratedFitsPath);
     void diagnoseTrackingIssue();
-  void debugCoordinateSystem() ;				
-  void testStellinaAzimuthConvention() ;
- double calculateLST_HighPrecision(double JD, double longitude);
- void diagnoseLSTAccuracy();
- void testTimeDriftFix();
-  void analyzeRealStellinaIssue();
-  void testRealisticAccuracy();
-  void verifyPlatesolvingHints();
-// Add these to your header file:
- void dumpCoordinateData();
- void dumpCoordinateDataToCSV();
- void analyzeCoordinateDrift();
- void calibrateFromProcessedFiles();
- bool readStellinaDataFromSolvedFits(const QString &fitsPath, ProcessedImageData &data);
- bool readSolveFieldResults(const QString &fitsPath, ProcessedImageData &data);
- void analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, const QDateTime &sessionStart);
- void testSystematicOffsetCorrection();
- void verifySystematicOffsetsInUse();
- void plotMountErrors();
+    void debugCoordinateSystem();				
+    void testStellinaAzimuthConvention();
+    double calculateLST_HighPrecision(double JD, double longitude);
+    void diagnoseLSTAccuracy();
+    void testTimeDriftFix();
+    void analyzeRealStellinaIssue();
+    void testRealisticAccuracy();
+    void verifyPlatesolvingHints();
+    void dumpCoordinateData();
+    void dumpCoordinateDataToCSV();
+    void analyzeCoordinateDrift();
+    void calibrateFromProcessedFiles();
+    bool readStellinaDataFromSolvedFits(const QString &fitsPath, ProcessedImageData &data);
+    bool readSolveFieldResults(const QString &fitsPath, ProcessedImageData &data);
+    void analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, const QDateTime &sessionStart);
+    void testSystematicOffsetCorrection();
+    void verifySystematicOffsetsInUse();
+    void plotMountErrors();
 
 private slots:
     // UI slots
@@ -223,13 +213,11 @@ private slots:
     
     // Processing slots
     void onProcessingTimer();
-    // Add this function declaration to StellinaProcessor.h in the private slots section:
     void calibrateFromStackingJSON();
     bool parseStackingJSON(const QString &jsonPath, StackingCorrectionData &data);
     void analyzeStackingCorrections(const QList<StackingCorrectionData> &stackingData, const QDateTime &sessionStart);
-
     void analyzeMosaicCorrections(const QList<StackingCorrectionData> &stackingData,
-				  const QMap<QString, int> &patternCount);
+                                  const QMap<QString, int> &patternCount);
     void onWCSParametersChanged();
     void onStartWCSStacking();
     void onWCSStackingComplete(bool success);
@@ -238,30 +226,26 @@ private slots:
     void onSaveWCSResult();
   
 private:
-
-// Mount tilt correction parameters
-
-// Update the MountTiltParams struct in StellinaProcessor.h to include:
-
-struct MountTiltParams {
-    double northTilt;           // Static north tilt θ_N in degrees (deprecated)
-    double eastTilt;            // Static east tilt θ_E in degrees (deprecated)
-    double driftRA;             // RA drift rate in degrees per hour
-    double driftDec;            // Dec drift rate in degrees per hour
-    double systematicRAOffset;  // Systematic RA offset correction (deprecated)
-    double systematicDecOffset; // Systematic Dec offset correction (deprecated)
-    double initialRAOffset;     // RA error at session start (t=0)
-    double initialDecOffset;    // Dec error at session start (t=0)
-    QDateTime sessionStart;     // Start time of observing session
-    bool enableCorrection;      // Whether to apply correction
-    bool enableDriftCorrection; // Whether to apply time-dependent drift correction
-    
-    MountTiltParams() : northTilt(0.0), eastTilt(0.0), 
-                       driftRA(0.0), driftDec(0.0),
-                       systematicRAOffset(0.0), systematicDecOffset(0.0),
-                       initialRAOffset(0.0), initialDecOffset(0.0),
-                       enableCorrection(false), enableDriftCorrection(false) {}
-};
+    // Mount tilt correction parameters
+    struct MountTiltParams {
+        double northTilt;           // Static north tilt θ_N in degrees (deprecated)
+        double eastTilt;            // Static east tilt θ_E in degrees (deprecated)
+        double driftRA;             // RA drift rate in degrees per hour
+        double driftDec;            // Dec drift rate in degrees per hour
+        double systematicRAOffset;  // Systematic RA offset correction (deprecated)
+        double systematicDecOffset; // Systematic Dec offset correction (deprecated)
+        double initialRAOffset;     // RA error at session start (t=0)
+        double initialDecOffset;    // Dec error at session start (t=0)
+        QDateTime sessionStart;     // Start time of observing session
+        bool enableCorrection;      // Whether to apply correction
+        bool enableDriftCorrection; // Whether to apply time-dependent drift correction
+        
+        MountTiltParams() : northTilt(0.0), eastTilt(0.0), 
+                           driftRA(0.0), driftDec(0.0),
+                           systematicRAOffset(0.0), systematicDecOffset(0.0),
+                           initialRAOffset(0.0), initialDecOffset(0.0),
+                           enableCorrection(false), enableDriftCorrection(false) {}
+    };
     MountTiltParams m_mountTilt;
 
     void setupUI();
@@ -290,28 +274,30 @@ struct MountTiltParams {
     bool convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec);
     bool checkStellinaQuality(const QJsonObject &json);
     QString getStageDescription() const;
-void altAzToRaDec_Debug(double alt, double az, double lat, double lst, 
-					   double &ra, double &dec, const QString &convention);
-void altAzToRaDec_HourAngleTest(double alt, double az, double lat, double lst, 
-						   double &ra, double &dec, bool subtractH) ;
-  void altAzToRaDec_Standard(double alt, double az, double lat, double lst, double &ra, double &dec);
-  void altAzToRaDec_StellinaFixed(double alt, double az, double lat, double lst, double &ra, double &dec) ;
-  void testAllCoordinateVariations() ;
-// Mount tilt correction functions
-void applyMountTiltCorrection(double &alt, double &az, double inputAlt, double inputAz);
-void calibrateMountTilt();
-void testMountTiltCorrection();
-bool loadMountTiltFromSettings();
-void saveMountTiltToSettings();
-void updateTiltUI();
-  void performDriftAnalysis(const QList<StackingCorrectionData> &stackingData,
-                                           const QList<double> &timePoints,
-                                           const QList<double> &xCorrections,
-                                           const QList<double> &yCorrections,
-					       const QDateTime &sessionStart);
+    void altAzToRaDec_Debug(double alt, double az, double lat, double lst, 
+                           double &ra, double &dec, const QString &convention);
+    void altAzToRaDec_HourAngleTest(double alt, double az, double lat, double lst, 
+                                   double &ra, double &dec, bool subtractH);
+    void altAzToRaDec_Standard(double alt, double az, double lat, double lst, double &ra, double &dec);
+    void altAzToRaDec_StellinaFixed(double alt, double az, double lat, double lst, double &ra, double &dec);
+    void testAllCoordinateVariations();
+
+    // Mount tilt correction functions
+    void applyMountTiltCorrection(double &alt, double &az, double inputAlt, double inputAz);
+    void calibrateMountTilt();
+    void testMountTiltCorrection();
+    bool loadMountTiltFromSettings();
+    void saveMountTiltToSettings();
+    void updateTiltUI();
+    void performDriftAnalysis(const QList<StackingCorrectionData> &stackingData,
+                             const QList<double> &timePoints,
+                             const QList<double> &xCorrections,
+                             const QList<double> &yCorrections,
+                             const QDateTime &sessionStart);
+    
     // Dark calibration functions
     void scanDarkFrames();
-    bool findMatchingDarkFrame(const QString &lightFrame, DarkFrame &darkFrame); // Deprecated
+    bool findMatchingDarkFrame(const QString &lightFrame, DarkFrame &darkFrame);
     QStringList findAllMatchingDarkFrames(int targetExposure, int targetTemperature, const QString &targetBinning);
     bool createMasterDark(const QStringList &darkFrames, const QString &outputPath);
     bool createMasterDarkDirect(const QStringList &darkFrames, const QString &outputPath);
@@ -350,7 +336,7 @@ void updateTiltUI();
     bool checkSolveFieldInstalled();
     bool createBinnedImageForPlatesolving(const QString &inputPath, const QString &binnedPath);
     bool performCFABinning(const std::vector<float> &inputPixels, std::vector<float> &binnedPixels, 
-			   long width, long height, long &binnedWidth, long &binnedHeight);
+                          long width, long height, long &binnedWidth, long &binnedHeight);
     QProcessEnvironment createSolveFieldEnvironment();
     QStringList getAstrometryPaths();
     void initializeWCSStacker();
@@ -395,7 +381,7 @@ void updateTiltUI();
     QLabel *m_darkFramesCount;
     QPushButton *m_refreshDarkButton;
     
-    // Basic options group (original options)
+    // Basic options group
     QGroupBox *m_basicOptionsGroup;
     QCheckBox *m_qualityFilterCheck;
     QCheckBox *m_debugModeCheck;
@@ -456,9 +442,10 @@ void updateTiltUI();
     QDoubleSpinBox *m_driftRASpin;
     QDoubleSpinBox *m_driftDecSpin;
     QLabel *m_driftStatusLabel;
+    
     // WCS Astrometric Stacker
     WCSAstrometricStacker *m_wcsStacker;
-    WCSStackingParams m_wcsStackingParams;
+    StackingParams m_wcsStackingParams;  // Changed from WCSStackingParams to StackingParams
     
     // WCS Stacking UI elements
     QGroupBox *m_wcsStackingGroup;
@@ -522,7 +509,7 @@ void updateTiltUI();
     int m_exposureTolerance;
     
     // Stacking settings
-    WCSStackingParams m_stackingParams;
+    StackingParams m_stackingParams;  // Legacy params for backward compatibility
     
     // File tracking for pipeline
     QStringList m_darkCalibratedFiles;
@@ -534,8 +521,7 @@ void updateTiltUI();
     // Add to private member variables
     QList<StellinaImageData> m_stellinaImageData;  // Tracks metadata through pipeline
 
-    // Add to private function declarations
-   // Stage setup functions for clean pipeline flow
+    // Stage setup functions for clean pipeline flow
     bool setupDarkCalibrationStage();
     bool setupPlatesolvingStage();
     bool setupStackingStage();

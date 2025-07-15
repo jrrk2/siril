@@ -64,10 +64,6 @@ void StellinaProcessor::connectSignals() {
         m_stackingParams.method = text;
         onStackingParametersChanged();
     });
-    connect(m_rejectionMethodCombo, &QComboBox::currentTextChanged, [this](const QString &text) {
-        m_stackingParams.rejection = text;
-        onStackingParametersChanged();
-    });
     connect(m_rejectionLowSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), [this](double value) {
         m_stackingParams.rejectionLow = value;
         onStackingParametersChanged();
@@ -95,48 +91,63 @@ void StellinaProcessor::connectSignals() {
     });
 
     // Mount tilt correction signals
-    connect(m_enableTiltCorrectionCheck, &QCheckBox::toggled, [this](bool checked) {
-	m_mountTilt.enableCorrection = checked;
-	updateTiltUI();
-	saveMountTiltToSettings();
-    });
+    if (m_enableTiltCorrectionCheck) {
+        connect(m_enableTiltCorrectionCheck, &QCheckBox::toggled, [this](bool checked) {
+            m_mountTilt.enableCorrection = checked;
+            updateTiltUI();
+            saveMountTiltToSettings();
+        });
+    }
 
-    connect(m_northTiltSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
-	    [this](double value) {
-	m_mountTilt.northTilt = value;
-	saveMountTiltToSettings();
-    });
+    if (m_northTiltSpin) {
+        connect(m_northTiltSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
+                [this](double value) {
+            m_mountTilt.northTilt = value;
+            saveMountTiltToSettings();
+        });
+    }
 
-    connect(m_eastTiltSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
-	    [this](double value) {
-	m_mountTilt.eastTilt = value;
-	saveMountTiltToSettings();
-    });
+    if (m_eastTiltSpin) {
+        connect(m_eastTiltSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
+                [this](double value) {
+            m_mountTilt.eastTilt = value;
+            saveMountTiltToSettings();
+        });
+    }
 
-    connect(m_calibrateTiltButton, &QPushButton::clicked, 
-	    this, &StellinaProcessor::calibrateMountTilt);
+    if (m_calibrateTiltButton) {
+        connect(m_calibrateTiltButton, &QPushButton::clicked, 
+                this, &StellinaProcessor::calibrateMountTilt);
+    }
 
-    connect(m_testTiltButton, &QPushButton::clicked, 
-	    this, &StellinaProcessor::testMountTiltCorrection);
+    if (m_testTiltButton) {
+        connect(m_testTiltButton, &QPushButton::clicked, 
+                this, &StellinaProcessor::testMountTiltCorrection);
+    }
 
-    connect(m_enableDriftCorrectionCheck, &QCheckBox::toggled, [this](bool checked) {
-	m_mountTilt.enableDriftCorrection = checked;
-	updateTiltUI();
-	saveMountTiltToSettings();
-    });
+    if (m_enableDriftCorrectionCheck) {
+        connect(m_enableDriftCorrectionCheck, &QCheckBox::toggled, [this](bool checked) {
+            m_mountTilt.enableDriftCorrection = checked;
+            updateTiltUI();
+            saveMountTiltToSettings();
+        });
+    }
 
-    connect(m_driftRASpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
-	    [this](double value) {
-	m_mountTilt.driftRA = value;
-	saveMountTiltToSettings();
-    });
+    if (m_driftRASpin) {
+        connect(m_driftRASpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
+                [this](double value) {
+            m_mountTilt.driftRA = value;
+            saveMountTiltToSettings();
+        });
+    }
 
-    connect(m_driftDecSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
-	    [this](double value) {
-	m_mountTilt.driftDec = value;
-	saveMountTiltToSettings();
-    });
-    
+    if (m_driftDecSpin) {
+        connect(m_driftDecSpin, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), 
+                [this](double value) {
+            m_mountTilt.driftDec = value;
+            saveMountTiltToSettings();
+        });
+    }
 }
 
 // UI Event Handlers
@@ -275,7 +286,15 @@ void StellinaProcessor::onPreviewStacking() {
     QString previewSequence = "preview_stack";
     if (createSequence(previewImages, previewSequence)) {
         if (performGlobalRegistration(previewSequence)) {
-            if (performStacking(previewSequence, m_stackingParams)) {
+            // Convert WCSStackingParams to StackingParams for the preview
+            StackingParams previewParams;
+            previewParams.combination = StackingParams::WEIGHTED_MEAN;
+            previewParams.rejection = StackingParams::SIGMA_CLIPPING;
+            previewParams.sigma_low = m_stackingParams.rejectionLow;
+            previewParams.sigma_high = m_stackingParams.rejectionHigh;
+            previewParams.normalize_exposure = m_stackingParams.normalizeImages;
+            
+            if (performStacking(previewSequence, previewParams)) {
                 logMessage("Preview stack created successfully! Check output directory.", "green");
             } else {
                 logMessage("Preview stacking failed.", "red");
@@ -292,7 +311,7 @@ void StellinaProcessor::onStackingParametersChanged() {
     // This function is called when stacking parameters change
     // Update the internal stacking parameters structure
     m_stackingParams.method = m_stackingMethodCombo->currentText();
-    m_stackingParams.rejection = m_rejectionMethodCombo->currentText();
+//    m_stackingParams.rejection = m_rejectionMethodCombo->currentText();
     m_stackingParams.rejectionLow = m_rejectionLowSpin->value();
     m_stackingParams.rejectionHigh = m_rejectionHighSpin->value();
     m_stackingParams.normalizeImages = m_normalizeCheck->isChecked();
@@ -364,11 +383,11 @@ void StellinaProcessor::updateUI() {
     
     updateConnectionStatus();
     updateWCSUI();
-    
 }
 
 // Update UI to show connection type
 void StellinaProcessor::updateConnectionStatus() {
+    // Implementation for connection status updates
 }
 
 void StellinaProcessor::logMessage(const QString &message, const QString &color) {
@@ -396,44 +415,42 @@ void StellinaProcessor::updateTiltUI() {
     bool driftEnabled = m_mountTilt.enableDriftCorrection;
     
     // Update tilt UI
-    m_northTiltSpin->setEnabled(tiltEnabled);
-    m_eastTiltSpin->setEnabled(tiltEnabled);
-    m_calibrateTiltButton->setEnabled(tiltEnabled);
-    m_testTiltButton->setEnabled(tiltEnabled);
+    if (m_northTiltSpin) m_northTiltSpin->setEnabled(tiltEnabled);
+    if (m_eastTiltSpin) m_eastTiltSpin->setEnabled(tiltEnabled);
+    if (m_calibrateTiltButton) m_calibrateTiltButton->setEnabled(tiltEnabled);
+    if (m_testTiltButton) m_testTiltButton->setEnabled(tiltEnabled);
     
     // Update drift UI
     if (m_enableDriftCorrectionCheck) {
         m_enableDriftCorrectionCheck->setEnabled(tiltEnabled);
-        m_driftRASpin->setEnabled(tiltEnabled && driftEnabled);
-        m_driftDecSpin->setEnabled(tiltEnabled && driftEnabled);
+        if (m_driftRASpin) m_driftRASpin->setEnabled(tiltEnabled && driftEnabled);
+        if (m_driftDecSpin) m_driftDecSpin->setEnabled(tiltEnabled && driftEnabled);
         
         m_enableDriftCorrectionCheck->setChecked(driftEnabled);
-        m_driftRASpin->setValue(m_mountTilt.driftRA);
-        m_driftDecSpin->setValue(m_mountTilt.driftDec);
+        if (m_driftRASpin) m_driftRASpin->setValue(m_mountTilt.driftRA);
+        if (m_driftDecSpin) m_driftDecSpin->setValue(m_mountTilt.driftDec);
     }
     
     // Update status labels
-    if (tiltEnabled) {
-        m_tiltStatusLabel->setText(QString("Tilt correction enabled: θ_N=%1°, θ_E=%2°")
-                                      .arg(m_mountTilt.northTilt, 0, 'f', 4)
-                                      .arg(m_mountTilt.eastTilt, 0, 'f', 4));
-        m_tiltStatusLabel->setStyleSheet("color: green; font-weight: bold;");
-        
-        if (m_driftStatusLabel) {
-            if (driftEnabled) {
-                m_driftStatusLabel->setText(QString("Drift correction: %1°/h RA, %2°/h Dec")
-                                              .arg(m_mountTilt.driftRA, 0, 'f', 3)
-                                              .arg(m_mountTilt.driftDec, 0, 'f', 3));
-                m_driftStatusLabel->setStyleSheet("color: green; font-weight: bold;");
-            } else {
-                m_driftStatusLabel->setText("Drift correction disabled");
-                m_driftStatusLabel->setStyleSheet("color: gray; font-style: italic;");
-            }
+    if (m_tiltStatusLabel) {
+        if (tiltEnabled) {
+            m_tiltStatusLabel->setText(QString("Tilt correction enabled: θ_N=%1°, θ_E=%2°")
+                                          .arg(m_mountTilt.northTilt, 0, 'f', 4)
+                                          .arg(m_mountTilt.eastTilt, 0, 'f', 4));
+            m_tiltStatusLabel->setStyleSheet("color: green; font-weight: bold;");
+        } else {
+            m_tiltStatusLabel->setText("Tilt correction disabled");
+            m_tiltStatusLabel->setStyleSheet("color: gray; font-style: italic;");
         }
-    } else {
-        m_tiltStatusLabel->setText("Tilt correction disabled");
-        m_tiltStatusLabel->setStyleSheet("color: gray; font-style: italic;");
-        if (m_driftStatusLabel) {
+    }
+    
+    if (m_driftStatusLabel) {
+        if (tiltEnabled && driftEnabled) {
+            m_driftStatusLabel->setText(QString("Drift correction: %1°/h RA, %2°/h Dec")
+                                          .arg(m_mountTilt.driftRA, 0, 'f', 3)
+                                          .arg(m_mountTilt.driftDec, 0, 'f', 3));
+            m_driftStatusLabel->setStyleSheet("color: green; font-weight: bold;");
+        } else {
             m_driftStatusLabel->setText("Drift correction disabled");
             m_driftStatusLabel->setStyleSheet("color: gray; font-style: italic;");
         }

@@ -3,6 +3,7 @@
 
 #include "WcsAstrometricStacker.h"
 #include <QFileInfo>
+#include <QTimer>
 #include <QDateTime>
 #include <QApplication>
 #include <QTextStream>
@@ -112,7 +113,7 @@ bool WCSAstrometricStacker::addImageFromStellinaData(const QString &fits_file,
     return true;
 }
 
-void WCSAstrometricStacker::setStackingParameters(const WCSStackingParams &params) {
+void WCSAstrometricStacker::setStackingParameters(const StackingParams &params) {
     m_params = params;
     logProcessing(QString("Updated stacking parameters: method=%1, rejection=%2")
                  .arg(static_cast<int>(params.combination))
@@ -274,7 +275,7 @@ void WCSAstrometricStacker::analyzeImageQuality() {
     logProcessing("Image quality analysis complete");
 }
 
-QString WCSAstrometricStacker::generateQualityReport() const {
+QString WCSAstrometricStacker::getQualityReport() const {
     QStringList report;
     
     report << "=== WCS Astrometric Stacking Quality Report ===";

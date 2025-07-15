@@ -20,6 +20,8 @@
 #include <QSettings>
 #include <QDateTime>
 #include <QDir>
+#include <QMenu>
+#include <QMenuBar>
 #include <QFileInfo>
 #include <QRegularExpression>
 
@@ -28,8 +30,8 @@ void StellinaProcessor::initializeWCSStacker() {
     m_wcsStacker = new WCSAstrometricStacker(this);
     
     // Set up default WCS stacking parameters
-    m_wcsStackingParams.combination = WCSStackingParams::WEIGHTED_MEAN;
-    m_wcsStackingParams.rejection = WCSStackingParams::SIGMA_CLIPPING;
+    m_wcsStackingParams.combination = StackingParams::WEIGHTED_MEAN;
+    m_wcsStackingParams.rejection = StackingParams::SIGMA_CLIPPING;
     m_wcsStackingParams.sigma_low = 3.0;
     m_wcsStackingParams.sigma_high = 3.0;
     m_wcsStackingParams.normalize_exposure = true;
@@ -62,18 +64,18 @@ void StellinaProcessor::setupWCSStackingUI() {
     // Combination method
     wcsLayout->addWidget(new QLabel("Combination Method:"), 1, 0);
     m_wcsCombinationMethodCombo = new QComboBox;
-    m_wcsCombinationMethodCombo->addItem("Weighted Mean", static_cast<int>(WCSStackingParams::WEIGHTED_MEAN));
-    m_wcsCombinationMethodCombo->addItem("Sigma Clipped Mean", static_cast<int>(WCSStackingParams::SIGMA_CLIPPED_MEAN));
-    m_wcsCombinationMethodCombo->addItem("Median", static_cast<int>(WCSStackingParams::MEDIAN));
-    m_wcsCombinationMethodCombo->addItem("Mean", static_cast<int>(WCSStackingParams::MEAN));
+    m_wcsCombinationMethodCombo->addItem("Weighted Mean", static_cast<int>(StackingParams::WEIGHTED_MEAN));
+    m_wcsCombinationMethodCombo->addItem("Sigma Clipped Mean", static_cast<int>(StackingParams::SIGMA_CLIPPED_MEAN));
+    m_wcsCombinationMethodCombo->addItem("Median", static_cast<int>(StackingParams::MEDIAN));
+    m_wcsCombinationMethodCombo->addItem("Mean", static_cast<int>(StackingParams::MEAN));
     wcsLayout->addWidget(m_wcsCombinationMethodCombo, 1, 1, 1, 3);
     
     // Rejection method
     wcsLayout->addWidget(new QLabel("Rejection Method:"), 2, 0);
     m_wcsRejectionMethodCombo = new QComboBox;
-    m_wcsRejectionMethodCombo->addItem("No Rejection", static_cast<int>(WCSStackingParams::NO_REJECTION));
-    m_wcsRejectionMethodCombo->addItem("Sigma Clipping", static_cast<int>(WCSStackingParams::SIGMA_CLIPPING));
-    m_wcsRejectionMethodCombo->addItem("Percentile Clipping", static_cast<int>(WCSStackingParams::PERCENTILE_CLIPPING));
+    m_wcsRejectionMethodCombo->addItem("No Rejection", static_cast<int>(StackingParams::NO_REJECTION));
+    m_wcsRejectionMethodCombo->addItem("Sigma Clipping", static_cast<int>(StackingParams::SIGMA_CLIPPING));
+    m_wcsRejectionMethodCombo->addItem("Percentile Clipping", static_cast<int>(StackingParams::PERCENTILE_CLIPPING));
     m_wcsRejectionMethodCombo->setCurrentIndex(1); // Default to sigma clipping
     wcsLayout->addWidget(m_wcsRejectionMethodCombo, 2, 1, 1, 3);
     
@@ -138,6 +140,12 @@ void StellinaProcessor::setupWCSStackingUI() {
     
     wcsLayout->addLayout(wcsButtonLayout, 7, 0, 1, 4);
     
+    // Add to stacking tab layout
+    QVBoxLayout *stackingTabLayout = qobject_cast<QVBoxLayout*>(m_stackingTab->layout());
+    if (stackingTabLayout) {
+        stackingTabLayout->addWidget(m_wcsStackingGroup);
+    }
+    
     // Connect signals
     connect(m_wcsCombinationMethodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &StellinaProcessor::onWCSParametersChanged);
@@ -166,9 +174,9 @@ void StellinaProcessor::setupWCSStackingUI() {
 
 void StellinaProcessor::onWCSParametersChanged() {
     // Update WCS stacking parameters from UI
-    m_wcsStackingParams.combination = static_cast<WCSStackingParams::CombinationMethod>(
+    m_wcsStackingParams.combination = static_cast<StackingParams::CombinationMethod>(
         m_wcsCombinationMethodCombo->currentData().toInt());
-    m_wcsStackingParams.rejection = static_cast<WCSStackingParams::RejectionMethod>(
+    m_wcsStackingParams.rejection = static_cast<StackingParams::RejectionMethod>(
         m_wcsRejectionMethodCombo->currentData().toInt());
     m_wcsStackingParams.sigma_low = m_wcsSigmaLowSpin->value();
     m_wcsStackingParams.sigma_high = m_wcsSigmaHighSpin->value();
@@ -234,27 +242,12 @@ void StellinaProcessor::onStartWCSStacking() {
         // Try to find corresponding StellinaImageData
         StellinaImageData *imageData = findImageDataByPath(fullPath);
         if (imageData) {
-            if (m_wcsNormalizeExposureCheck) {
-        settings.setValue("wcs/normalizeExposure", m_wcsNormalizeExposureCheck->isChecked());
-    }
-    if (m_wcsCreateWeightMapCheck) {
-        settings.setValue("wcs/createWeightMap", m_wcsCreateWeightMapCheck->isChecked());
-    }
-    if (m_wcsOutputWidthSpin) {
-        settings.setValue("wcs/outputWidth", m_wcsOutputWidthSpin->value());
-    }
-    if (m_wcsOutputHeightSpin) {
-        settings.setValue("wcs/outputHeight", m_wcsOutputHeightSpin->value());
-    }
-    if (m_wcsOutputPixelScaleSpin) {
-        settings.setValue("wcs/outputPixelScale", m_wcsOutputPixelScaleSpin->value());
-    }
-}csStacker->addImageFromStellinaData(fullPath, *imageData)) {
+            if (m_wcsStacker->addImageWithMetadata(fullPath, *imageData)) {
                 successfullyLoaded++;
             }
         } else {
             // If no StellinaImageData found, try loading just the FITS file
-            if (m_wcsStacker->addPlatesolveDFITSFile(fullPath)) {
+            if (m_wcsStacker->addImage(fullPath)) {
                 successfullyLoaded++;
             }
         }
@@ -304,7 +297,7 @@ void StellinaProcessor::onWCSStackingComplete(bool success) {
         logMessage(stats, "blue");
         
         // Generate and log quality report
-        QString qualityReport = m_wcsStacker->generateQualityReport();
+        QString qualityReport = m_wcsStacker->getQualityReport();
         logMessage("=== WCS Stacking Quality Report ===", "blue");
         QStringList reportLines = qualityReport.split('\n');
         for (const QString &line : reportLines) {
@@ -377,7 +370,7 @@ void StellinaProcessor::onSaveWCSResult() {
         QFile reportFile(reportPath);
         if (reportFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&reportFile);
-            out << m_wcsStacker->generateQualityReport();
+            out << m_wcsStacker->getQualityReport();
             reportFile.close();
             
             logMessage(QString("Quality report saved to: %1").arg(reportPath), "blue");
@@ -431,11 +424,11 @@ bool StellinaProcessor::performAstrometricStackingEnhanced() {
         for (const QString &filePath : m_plateSolvedFiles) {
             StellinaImageData *imageData = findImageDataByPath(filePath);
             if (imageData) {
-                if (m_wcsStacker->addImageFromStellinaData(filePath, *imageData)) {
+                if (m_wcsStacker->addImageWithMetadata(filePath, *imageData)) {
                     loaded++;
                 }
             } else {
-                if (m_wcsStacker->addPlatesolveDFITSFile(filePath)) {
+                if (m_wcsStacker->addImage(filePath)) {
                     loaded++;
                 }
             }
@@ -485,7 +478,7 @@ void StellinaProcessor::addWCSMenuItems() {
                                                        m_plateSolvedDirectory, "FITS Files (*.fits *.fit)");
         if (!testFile.isEmpty()) {
             WCSAstrometricStacker testStacker;
-            if (testStacker.addPlatesolveDFITSFile(testFile)) {
+            if (testStacker.addImage(testFile)) {
                 logMessage(QString("Successfully loaded WCS from: %1").arg(QFileInfo(testFile).fileName()), "green");
                 logMessage(QString("Image count: %1").arg(testStacker.getImageCount()), "blue");
             } else {
@@ -497,7 +490,7 @@ void StellinaProcessor::addWCSMenuItems() {
     wcsMenu->addAction("WCS &Quality Analysis", [this]() {
         if (m_wcsStacker->getImageCount() > 0) {
             m_wcsStacker->analyzeImageQuality();
-            QString report = m_wcsStacker->generateQualityReport();
+            QString report = m_wcsStacker->getQualityReport();
             
             QDialog *reportDialog = new QDialog(this);
             reportDialog->setWindowTitle("WCS Stacking Quality Report");
@@ -536,7 +529,7 @@ void StellinaProcessor::updateWCSUI() {
     }
     
     // Update combination method enable/disable based on rejection method
-    bool usingSigmaClipping = (m_wcsStackingParams.rejection == WCSStackingParams::SIGMA_CLIPPING);
+    bool usingSigmaClipping = (m_wcsStackingParams.rejection == StackingParams::SIGMA_CLIPPING);
     if (m_wcsSigmaLowSpin) {
         m_wcsSigmaLowSpin->setEnabled(usingSigmaClipping);
     }
@@ -549,14 +542,14 @@ void StellinaProcessor::loadWCSSettings() {
     QSettings settings;
     
     int combination = settings.value("wcs/combinationMethod", 
-                                    static_cast<int>(WCSStackingParams::WEIGHTED_MEAN)).toInt();
+                                    static_cast<int>(StackingParams::WEIGHTED_MEAN)).toInt();
     if (m_wcsCombinationMethodCombo) {
         m_wcsCombinationMethodCombo->setCurrentIndex(
             m_wcsCombinationMethodCombo->findData(combination));
     }
     
     int rejection = settings.value("wcs/rejectionMethod", 
-                                  static_cast<int>(WCSStackingParams::SIGMA_CLIPPING)).toInt();
+                                  static_cast<int>(StackingParams::SIGMA_CLIPPING)).toInt();
     if (m_wcsRejectionMethodCombo) {
         m_wcsRejectionMethodCombo->setCurrentIndex(
             m_wcsRejectionMethodCombo->findData(rejection));
@@ -588,7 +581,6 @@ void StellinaProcessor::loadWCSSettings() {
     onWCSParametersChanged();
 }
 
-/*
 void StellinaProcessor::saveWCSSettings() {
     QSettings settings;
     
@@ -604,6 +596,19 @@ void StellinaProcessor::saveWCSSettings() {
     if (m_wcsSigmaHighSpin) {
         settings.setValue("wcs/sigmaHigh", m_wcsSigmaHighSpin->value());
     }
-    if (m_w
-
-*/
+    if (m_wcsNormalizeExposureCheck) {
+        settings.setValue("wcs/normalizeExposure", m_wcsNormalizeExposureCheck->isChecked());
+    }
+    if (m_wcsCreateWeightMapCheck) {
+        settings.setValue("wcs/createWeightMap", m_wcsCreateWeightMapCheck->isChecked());
+    }
+    if (m_wcsOutputWidthSpin) {
+        settings.setValue("wcs/outputWidth", m_wcsOutputWidthSpin->value());
+    }
+    if (m_wcsOutputHeightSpin) {
+        settings.setValue("wcs/outputHeight", m_wcsOutputHeightSpin->value());
+    }
+    if (m_wcsOutputPixelScaleSpin) {
+        settings.setValue("wcs/outputPixelScale", m_wcsOutputPixelScaleSpin->value());
+    }
+}

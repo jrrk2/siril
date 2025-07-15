@@ -46,7 +46,9 @@ SOURCES += \
     StellinaProcessor_Processing.cpp \
     StellinaProcessor_Slots.cpp \
     StellinaProcessor_UI.cpp \
-
+    StellinaProcessor_WCS_Integration.cpp \
+    WcsAstrometricStacker.cpp \
+    
 # Header files
 HEADERS += \
     StellinaProcessor.h \
@@ -70,7 +72,7 @@ CONFIG(debug, debug|release) {
 CONFIG += warn_on
 
 # Additional libraries (if needed)
-LIBS += -lm -lcfitsio
+LIBS += -lm -lcfitsio -lwcs -lopencv_core -lopencv_imgproc -lopencv_imgcodecs -lopencv_features2d
 
 # Deployment settings for macOS
 macx {

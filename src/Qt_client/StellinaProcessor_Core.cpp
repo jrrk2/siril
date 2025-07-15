@@ -57,7 +57,7 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
     
     // Initialize stacking parameters
     m_stackingParams.method = "median";
-    m_stackingParams.rejection = "sigma";
+    m_stackingParams.rejection = StackingParams::SIGMA_CLIPPING;
     m_stackingParams.rejectionLow = 3.0;
     m_stackingParams.rejectionHigh = 3.0;
     m_stackingParams.normalizeImages = true;
