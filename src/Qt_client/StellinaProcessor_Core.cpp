@@ -3607,6 +3607,72 @@ bool StellinaProcessor::convertAltAzToRaDecExt(double alt, double az, const QStr
     return true;
 }
 
+// Update the coordinate conversion to apply time-dependent correction:
+bool StellinaProcessor::convertRaDecToAltAzExt(double ra, double dec, const QString &dateObs,
+					       double &alt, double &az, double &observer_lat, double &observer_lon,
+					       double &jd, double &lst, double &ha) {
+    // Parse observer location from settings
+    QStringList locationParts = m_observerLocation.split(',');
+    observer_lat = 51.5074;
+    observer_lon = -0.1278;
+    
+    if (locationParts.size() >= 2) {
+        bool ok1, ok2;
+        double lat = locationParts[0].trimmed().toDouble(&ok1);
+        double lon = locationParts[1].trimmed().toDouble(&ok2);
+        if (ok1 && ok2) {
+            observer_lat = lat;
+            observer_lon = lon;
+        }
+    }
+    
+    // Parse observation time
+    QDateTime obsTime;
+    if (!dateObs.isEmpty()) {
+        QStringList formats = {
+            "yyyy-MM-ddThh:mm:ss.zzz",
+            "yyyy-MM-ddThh:mm:ss.zzzZ", 
+            "yyyy-MM-ddThh:mm:ss",
+            "yyyy-MM-ddThh:mm:ssZ",
+            "yyyy-MM-dd hh:mm:ss.zzz",
+            "yyyy-MM-dd hh:mm:ss",
+            "yyyy-MM-dd"
+        };
+        
+        for (const QString &format : formats) {
+            obsTime = QDateTime::fromString(dateObs, format);
+            if (obsTime.isValid()) {
+                obsTime.setTimeSpec(Qt::UTC);
+                break;
+            }
+        }
+    }
+    
+    if (!obsTime.isValid()) {
+        logMessage(QString("ERROR: Could not parse observation time '%1'").arg(dateObs), "red");
+        return false;
+    }
+
+    // Calculate Julian Date and LST
+    jd = CoordinateUtils::computeJulianDay(obsTime.date().year(),
+                           obsTime.date().month(),
+                           obsTime.date().day(),
+                           obsTime.time().hour(),
+                           obsTime.time().minute(),
+                           obsTime.time().second());
+    
+    lst = calculateLST_HighPrecision(jd, observer_lon);
+    // Calculate RA/Dec from Alt/Az using the CoordinateUtils class
+    // Convert horizontal to equatorial
+    auto [altNow, azNow, haNow] = CoordinateUtils::raDecToAltAz(ra, dec, observer_lat, observer_lon, lst);
+
+    alt = altNow;
+    az = azNow;
+    ha = haNow;
+    
+    return true;
+}
+
 // Update the save/load settings functions:
 void StellinaProcessor::saveMountTiltToSettings() {
     QSettings settings;

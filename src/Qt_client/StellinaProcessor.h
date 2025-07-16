@@ -211,12 +211,16 @@ public:
     bool readAcqTimeFromFits(const QString &fitsPath, qint64 &acqTime, qint64 &refAcqTime, QDateTime &refUTCTime);
     QDateTime reconstructUTCFromAcqTime(qint64 acqTime, qint64 refAcqTime, const QDateTime &refUTCTime);
     bool convertAltAzToRaDecFromCalibratedFits(const QString &calibratedFitsPath, double &ra, double &dec);
+    bool convertRaDecToAltAzExt(double ra, double dec, const QString &dateObs,
+				double &alt, double &az, double &observer_lat, double &observer_lon,
+				double &jd, double &lst, double &ha);
     void compareTimingAccuracy() ;
     void validateAcqTimePreservation() ;
 				       
 private slots:
     // Debug slot functions
     void onTestConversion();
+    void onTestRevConversion();
     void onLoadImageData();
     void onTestBatch();
     void onRunPresetTest();
@@ -433,10 +437,13 @@ private:
     QGroupBox *m_coordDebugGroup;
     QDoubleSpinBox *m_debugAltSpin;
     QDoubleSpinBox *m_debugAzSpin;
+    QDoubleSpinBox *m_debugRASpin;
+    QDoubleSpinBox *m_debugDECSpin;
     QLineEdit *m_debugTimeEdit;
     QDoubleSpinBox *m_debugLatSpin;
     QDoubleSpinBox *m_debugLonSpin;
     QPushButton *m_testConversionButton;
+    QPushButton *m_testRevConversionButton;
     QPushButton *m_loadImageDataButton;
     QPushButton *m_testBatchButton;
     QTextEdit *m_debugResultsEdit;

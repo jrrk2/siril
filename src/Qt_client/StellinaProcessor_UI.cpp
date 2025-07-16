@@ -423,8 +423,8 @@ void StellinaProcessor::setupDebugTab() {
     // Input controls
     coordLayout->addWidget(new QLabel("Altitude (°):"), 0, 0);
     m_debugAltSpin = new QDoubleSpinBox;
-    m_debugAltSpin->setRange(-90.0, 90.0);
-    m_debugAltSpin->setValue(42.0410);  // Default from your test data
+    m_debugAltSpin->setRange(0.0, 90.0);
+    m_debugAltSpin->setValue(0.0);
     m_debugAltSpin->setDecimals(4);
     m_debugAltSpin->setSuffix("°");
     coordLayout->addWidget(m_debugAltSpin, 0, 1);
@@ -432,7 +432,7 @@ void StellinaProcessor::setupDebugTab() {
     coordLayout->addWidget(new QLabel("Azimuth (°):"), 0, 2);
     m_debugAzSpin = new QDoubleSpinBox;
     m_debugAzSpin->setRange(0.0, 360.0);
-    m_debugAzSpin->setValue(286.8526);  // Default from your test data
+    m_debugAzSpin->setValue(0.0);
     m_debugAzSpin->setDecimals(4);
     m_debugAzSpin->setSuffix("°");
     coordLayout->addWidget(m_debugAzSpin, 0, 3);
@@ -457,20 +457,39 @@ void StellinaProcessor::setupDebugTab() {
     m_debugLonSpin->setDecimals(4);
     m_debugLonSpin->setSuffix("°");
     coordLayout->addWidget(m_debugLonSpin, 2, 3);
+
+    coordLayout->addWidget(new QLabel("Right Ascension (°):"), 3, 0);
+    m_debugRASpin = new QDoubleSpinBox;
+    m_debugRASpin->setRange(0.0, 360.0);
+    m_debugRASpin->setValue(0.0);  // Default from your test data
+    m_debugRASpin->setDecimals(4);
+    m_debugRASpin->setSuffix("°");
+    coordLayout->addWidget(m_debugRASpin, 3, 1);
     
+    coordLayout->addWidget(new QLabel("Declination (°):"), 3, 2);
+    m_debugDECSpin = new QDoubleSpinBox;
+    m_debugDECSpin->setRange(0.0, 360.0);
+    m_debugDECSpin->setValue(0.0);  // Default from your test data
+    m_debugDECSpin->setDecimals(4);
+    m_debugDECSpin->setSuffix("°");
+    coordLayout->addWidget(m_debugDECSpin, 3, 3);
+        
     // Buttons
     QHBoxLayout *buttonLayout = new QHBoxLayout;
     m_testConversionButton = new QPushButton("Test Single Conversion");
     m_testConversionButton->setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; }");
+    m_testRevConversionButton = new QPushButton("Test Reverse Conversion");
+    m_testRevConversionButton->setStyleSheet("QPushButton { background-color: #2196F3; color: grey; font-weight: bold; }");
     m_loadImageDataButton = new QPushButton("Load from Current Images");
     m_testBatchButton = new QPushButton("Test Batch Processing");
     
     buttonLayout->addWidget(m_testConversionButton);
+    buttonLayout->addWidget(m_testRevConversionButton);
     buttonLayout->addWidget(m_loadImageDataButton);
     buttonLayout->addWidget(m_testBatchButton);
     buttonLayout->addStretch();
     
-    coordLayout->addLayout(buttonLayout, 3, 0, 1, 4);
+    coordLayout->addLayout(buttonLayout, 4, 0, 1, 4);
     
     // Preset tests group
     m_presetTestsGroup = new QGroupBox("Preset Test Cases");
@@ -583,6 +602,7 @@ void StellinaProcessor::setupDebugTab() {
     connect(runRandomSubsetButton, &QPushButton::clicked, [this]() { runRandomTestSubset(10); });
     connect(runAccuracyAnalysisButton, &QPushButton::clicked, this, &StellinaProcessor::runAccuracyAnalysis);
     connect(m_testConversionButton, &QPushButton::clicked, this, &StellinaProcessor::onTestConversion);
+    connect(m_testRevConversionButton, &QPushButton::clicked, this, &StellinaProcessor::onTestRevConversion);
     connect(m_loadImageDataButton, &QPushButton::clicked, this, &StellinaProcessor::onLoadImageData);
     connect(m_testBatchButton, &QPushButton::clicked, this, &StellinaProcessor::onTestBatch);
     connect(m_runPresetButton, &QPushButton::clicked, this, &StellinaProcessor::onRunPresetTest);
@@ -673,6 +693,50 @@ void StellinaProcessor::onTestConversion() {
         
     } else {
         debugLog("❌ CONVERSION FAILED");
+    }
+    
+    // Restore original observer location
+    m_observerLocation = savedLocation;
+    
+    debugLog("=====================================");
+    debugLog("");
+}
+
+void StellinaProcessor::onTestRevConversion() {
+    debugLog("=== MANUAL COORDINATE REVERSE CONVERSION TEST ===");
+    
+    double ra = m_debugRASpin->value();
+    double dec = m_debugDECSpin->value();
+    QString timeStr = m_debugTimeEdit->text();
+    double lat = m_debugLatSpin->value();
+    double lon = m_debugLonSpin->value();
+    
+    debugLog(QString("Input Parameters:"));
+    debugLog(QString("  RA:  %1°").arg(ra, 0, 'f', 4));
+    debugLog(QString("  DEC:   %1°").arg(dec, 0, 'f', 4));
+    debugLog(QString("  Time:      %1").arg(timeStr));
+    debugLog(QString("  Observer:  %1°N, %2°E").arg(lat, 0, 'f', 4).arg(lon, 0, 'f', 4));
+    debugLog("");
+    
+    // Save current observer location and set test location
+    QString savedLocation = m_observerLocation;
+    m_observerLocation = QString("%1,%2").arg(lat, 0, 'f', 4).arg(lon, 0, 'f', 4);
+    
+    // Test the conversion
+    double alt, az, olat, olong, jd, lst, hourAngle;
+    bool success = convertRaDecToAltAzExt(ra, dec, timeStr, alt, az, olat, olong, jd, lst, hourAngle);
+    
+    if (success) {
+        debugLog("Conversion Result:");
+        debugLog(QString(" ALT:  %1° ")
+                 .arg(alt, 0, 'f', 6));
+        debugLog(QString(" AZ: %1° ")
+                 .arg(dec, 0, 'f', 6));
+        debugLog("Additional Info:");
+        debugLog(QString("  Julian Day: %1").arg(jd, 0, 'f', 6));
+        debugLog(QString("  LST:        %1h (%2°)").arg(lst, 0, 'f', 4).arg(lst * 15.0, 0, 'f', 2));
+        
+        debugLog(QString("  Hour Angle: %1°").arg(hourAngle, 0, 'f', 4));
     }
     
     // Restore original observer location
