@@ -3243,7 +3243,7 @@ void StellinaProcessor::calibrateFromProcessedFiles() {
     logMessage(QString("Found %1 plate-solved images to analyze").arg(solvedFiles.size()), "blue");
     
     // Process each solved image
-    QDateTime sessionStart;
+    double sessionStart;
     bool sessionStartSet = false;
     
     for (const QString &solvedFile : solvedFiles) {
@@ -3295,11 +3295,11 @@ void StellinaProcessor::calibrateFromProcessedFiles() {
         
         // Set session start time from first valid image
         if (!sessionStartSet) {
-            sessionStart = data.obsTime;
+            sessionStart = data.obsTime.toMSecsSinceEpoch() / 60000.0 ;
             sessionStartSet = true;
             data.minutesFromStart = 0.0;
         } else {
-            data.minutesFromStart = sessionStart.msecsTo(data.obsTime) / 60000.0;
+            data.minutesFromStart = data.obsTime.toMSecsSinceEpoch() - sessionStart;
         }
         
         data.isValid = true;
@@ -3420,7 +3420,7 @@ bool StellinaProcessor::readSolveFieldResults(const QString &fitsPath, Processed
 // Replace the existing function in StellinaProcessor_Core.cpp
 
 void StellinaProcessor::analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, 
-                                                   const QDateTime &sessionStart) {
+                                                   const double &sessionStart) {
     logMessage("", "gray");
     logMessage("ANALYZING MOUNT ERRORS WITH LINEAR REGRESSION:", "blue");
     
@@ -3699,12 +3699,12 @@ bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString
    
     // Apply time-dependent drift correction if enabled
     if (m_mountTilt.enableCorrection && m_mountTilt.enableDriftCorrection && 
-        m_mountTilt.sessionStart.isValid()) {
+        m_mountTilt.sessionStart != 0) {
         
         double originalRA = ra, originalDec = dec;
         
         // Calculate time elapsed since session start (in hours)
-        double elapsedHours = m_mountTilt.sessionStart.msecsTo(obsTime) / 3600000.0;
+        double elapsedHours = (obsTime.toMSecsSinceEpoch() - m_mountTilt.sessionStart) / 3600000.0;
         
         // Apply linear drift correction: correction = initial_offset + drift_rate * elapsed_time
         double raCorrection = -(m_mountTilt.initialRAOffset + m_mountTilt.driftRA * elapsedHours);
@@ -3775,7 +3775,7 @@ bool StellinaProcessor::loadMountTiltFromSettings() {
     m_mountTilt.initialDecOffset = settings.value("mountTilt/initialDecOffset", 0.0).toDouble();
     m_mountTilt.enableCorrection = settings.value("mountTilt/enableCorrection", false).toBool();
     m_mountTilt.enableDriftCorrection = settings.value("mountTilt/enableDriftCorrection", false).toBool();
-    m_mountTilt.sessionStart = settings.value("mountTilt/sessionStart").toDateTime();
+    m_mountTilt.sessionStart = settings.value("mountTilt/sessionStart").toDateTime().toMSecsSinceEpoch();
     
     if (m_mountTilt.enableCorrection && m_mountTilt.enableDriftCorrection) {
         logMessage(QString("Loaded mount drift correction: initial RA=%1°, drift=%2°/h")
@@ -3830,7 +3830,7 @@ void StellinaProcessor::testSystematicOffsetCorrection() {
         logMessage(QString("  Initial Dec offset: %1°").arg(m_mountTilt.initialDecOffset, 0, 'f', 4), "blue");
         logMessage(QString("  RA drift rate: %1°/hour").arg(m_mountTilt.driftRA, 0, 'f', 3), "blue");
         logMessage(QString("  Dec drift rate: %1°/hour").arg(m_mountTilt.driftDec, 0, 'f', 3), "blue");
-        logMessage(QString("  Session start: %1").arg(m_mountTilt.sessionStart.toString(Qt::ISODate)), "blue");
+        logMessage(QString("  Session start: %1").arg(m_mountTilt.sessionStart), "blue");
     } else {
         logMessage("  Drift correction is disabled - enable it first", "red");
         return;
@@ -4540,7 +4540,7 @@ void StellinaProcessor::calibrateFromStackingJSON() {
     
     // Parse all stacking files
     QList<StackingCorrectionData> stackingData;
-    QDateTime sessionStart;
+    double sessionStart;
     bool sessionStartSet = false;
     
     for (const QString &jsonFile : jsonFiles) {
@@ -4550,11 +4550,11 @@ void StellinaProcessor::calibrateFromStackingJSON() {
         if (parseStackingJSON(jsonPath, data)) {
             // Set session start from first valid file
             if (!sessionStartSet) {
-                sessionStart = data.obsTime;
+                sessionStart = data.acqTime;
                 sessionStartSet = true;
                 data.minutesFromStart = 0.0;
             } else {
-                data.minutesFromStart = sessionStart.msecsTo(data.obsTime) / 60000.0;
+                data.minutesFromStart = (data.acqTime - sessionStart) / 60000.0;
             }
             
             stackingData.append(data);
@@ -4613,13 +4613,7 @@ bool StellinaProcessor::parseStackingJSON(const QString &jsonPath, StackingCorre
         return false;
     }
     
-    qint64 acqTime = root["acqTime"].toVariant().toLongLong();
-    
-    // Convert boot time to real time (this is approximate - you might need to adjust)
-    // For now, use a reasonable estimate based on your session start time
-    QDateTime bootReference = QDateTime::fromString("2024-01-09T22:12:00", "yyyy-MM-ddThh:mm:ss");
-    bootReference.setTimeSpec(Qt::UTC);
-    data.obsTime = bootReference.addMSecs(acqTime - 10000000); // Rough boot offset
+    data.acqTime = root["acqTime"].toVariant().toLongLong();
     
     // Extract mount position
     if (root.contains("motors")) {
@@ -4683,7 +4677,7 @@ bool StellinaProcessor::parseStackingJSON(const QString &jsonPath, StackingCorre
 // Replace the analyzeStackingCorrections function with this version
 
 void StellinaProcessor::analyzeStackingCorrections(const QList<StackingCorrectionData> &stackingData, 
-                                                  const QDateTime &sessionStart) {
+                                                  const double &sessionStart) {
     logMessage("", "gray");
     logMessage("ANALYZING STACKING CORRECTIONS (MOSAIC-AWARE):", "blue");
     
@@ -4871,7 +4865,7 @@ void StellinaProcessor::performDriftAnalysis(const QList<StackingCorrectionData>
                                            const QList<double> &timePoints,
                                            const QList<double> &xCorrections,
                                            const QList<double> &yCorrections,
-                                           const QDateTime &sessionStart) {
+                                           const double &sessionStart) {
     // Original drift analysis code (for single field observations)
     
     const double PIXEL_SCALE_DEG = 1.25 / 3600.0; // degrees per pixel

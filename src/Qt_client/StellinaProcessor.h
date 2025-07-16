@@ -127,7 +127,7 @@ struct StellinaImageData {
 struct StackingCorrectionData {
     QString imageFilename;
     int imageNumber;
-    QDateTime obsTime;
+    qint64 acqTime;
     double minutesFromStart;
     
     // Mount position
@@ -204,7 +204,7 @@ public:
     void calibrateFromProcessedFiles();
     bool readStellinaDataFromSolvedFits(const QString &fitsPath, ProcessedImageData &data);
     bool readSolveFieldResults(const QString &fitsPath, ProcessedImageData &data);
-    void analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, const QDateTime &sessionStart);
+    void analyzeAndCalibrateFromData(const QList<ProcessedImageData> &imageData, const double &sessionStart);
     void testSystematicOffsetCorrection();
     void verifySystematicOffsetsInUse();
     void plotMountErrors();
@@ -241,7 +241,7 @@ private slots:
     void onProcessingTimer();
     void calibrateFromStackingJSON();
     bool parseStackingJSON(const QString &jsonPath, StackingCorrectionData &data);
-    void analyzeStackingCorrections(const QList<StackingCorrectionData> &stackingData, const QDateTime &sessionStart);
+    void analyzeStackingCorrections(const QList<StackingCorrectionData> &stackingData, const double &sessionStart);
     void analyzeMosaicCorrections(const QList<StackingCorrectionData> &stackingData,
                                   const QMap<QString, int> &patternCount);
     void onWCSParametersChanged();
@@ -275,7 +275,7 @@ private:
         double systematicDecOffset; // Systematic Dec offset correction (deprecated)
         double initialRAOffset;     // RA error at session start (t=0)
         double initialDecOffset;    // Dec error at session start (t=0)
-        QDateTime sessionStart;     // Start time of observing session
+        double sessionStart;        // Start time of observing session
         bool enableCorrection;      // Whether to apply correction
         bool enableDriftCorrection; // Whether to apply time-dependent drift correction
         
@@ -365,7 +365,7 @@ private:
                              const QList<double> &timePoints,
                              const QList<double> &xCorrections,
                              const QList<double> &yCorrections,
-                             const QDateTime &sessionStart);
+                             const double &sessionStart);
     
     // Dark calibration functions
     void scanDarkFrames();
