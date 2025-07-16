@@ -3487,16 +3487,24 @@ void StellinaProcessor::analyzeAndCalibrateFromData(const QList<ProcessedImageDa
     logMessage("=== LINEAR REGRESSION CALIBRATION COMPLETE ===", "blue");
 }
 
-// Update the coordinate conversion to apply time-dependent correction:
 bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec) {
+  double observer_lat, observer_lon, jd, lst, ha;
+  return convertAltAzToRaDecExt(alt, az, dateObs, ra, dec, observer_lat, observer_lon, jd, lst, ha);
+
+}
+
+// Update the coordinate conversion to apply time-dependent correction:
+bool StellinaProcessor::convertAltAzToRaDecExt(double alt, double az, const QString &dateObs,
+					       double &ra, double &dec, double &observer_lat, double &observer_lon,
+					       double &jd, double &lst, double &ha) {
     // Apply mount tilt correction first (currently just passes through)
     double correctedAlt, correctedAz;
     applyMountTiltCorrection(correctedAlt, correctedAz, alt, az);
     
     // Parse observer location from settings
     QStringList locationParts = m_observerLocation.split(',');
-    double observer_lat = 51.5074;
-    double observer_lon = -0.1278;
+    observer_lat = 51.5074;
+    observer_lon = -0.1278;
     
     if (locationParts.size() >= 2) {
         bool ok1, ok2;
@@ -3536,24 +3544,25 @@ bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString
     }
 
     // Calculate Julian Date and LST
-    double jd = CoordinateUtils::computeJulianDay(obsTime.date().year(),
+    jd = CoordinateUtils::computeJulianDay(obsTime.date().year(),
                            obsTime.date().month(),
                            obsTime.date().day(),
                            obsTime.time().hour(),
                            obsTime.time().minute(),
                            obsTime.time().second());
     
-    double lst = calculateLST_HighPrecision(jd, observer_lon);
+    lst = calculateLST_HighPrecision(jd, observer_lon);
     // Calculate RA/Dec from Alt/Az using the CoordinateUtils class
     // Convert horizontal to equatorial
-    auto [raNow, decNow, ha] = CoordinateUtils::altAzToRaDec(correctedAlt, correctedAz, observer_lat, observer_lon, lst);
+    auto [raNow, decNow, haNow] = CoordinateUtils::altAzToRaDec(correctedAlt, correctedAz, observer_lat, observer_lon, lst);
     
     // Convert current epoch to J2000
     auto [ra2000, dec2000] = CoordinateUtils::jNowToJ2000(raNow, decNow);
 
     ra = ra2000;
     dec = dec2000;
-   
+    ha = haNow;
+    
     // Apply time-dependent drift correction if enabled
     if (m_mountTilt.enableCorrection && m_mountTilt.enableDriftCorrection && 
         m_mountTilt.sessionStart != 0) {

@@ -316,6 +316,9 @@ private:
     QJsonObject loadStellinaJson(const QString &jsonPath);
     bool extractCoordinates(const QJsonObject &json, double &alt, double &az);
     bool convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec);
+    bool convertAltAzToRaDecExt(double alt, double az, const QString &dateObs,
+					       double &ra, double &dec, double &observer_lat, double &observer_lon,
+						   double &jd, double &lst, double &ha) ;
     bool checkStellinaQuality(const QJsonObject &json);
     QString getStageDescription() const;
     void runCoordinateTestSuite();

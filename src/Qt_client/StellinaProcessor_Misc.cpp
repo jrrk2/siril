@@ -503,7 +503,28 @@ bool StellinaProcessor::writeStellinaMetadataWithCoordinates(const QString &fits
     // Convert Alt/Az to RA/DEC and write to header
     double ra, dec;
     if (imageData.hasValidCoordinates && !imageData.dateObs.isEmpty()) {
-        if (convertAltAzToRaDec(imageData.altitude, imageData.azimuth, imageData.dateObs, ra, dec)) {
+      double obslat, obslong, jd, lst, ha;
+      if (convertAltAzToRaDecExt(imageData.altitude, imageData.azimuth, imageData.dateObs, ra, dec, obslat, obslong, jd, lst, ha)) {
+	    if (fits_write_key(fptr, TDOUBLE, "OBSLAT", &obslat, "Observer latitude for coordinate conversion", &status)) {
+                    logMessage("Warning: Could not write observer latitude", "orange");
+                    status = 0;
+                }
+	    if (fits_write_key(fptr, TDOUBLE, "OBSLONG", &obslong, "Observer longitude for coordinate conversion", &status)) {
+                    logMessage("Warning: Could not write observer longitude", "orange");
+                    status = 0;
+                }
+	    if (fits_write_key(fptr, TDOUBLE, "JULIAN", &jd, "Julian date for coordinate conversion", &status)) {
+                    logMessage("Warning: Could not write Julian date", "orange");
+                    status = 0;
+                }
+	    if (fits_write_key(fptr, TDOUBLE, "LST", &lst, "Local solar time for coordinate conversion", &status)) {
+                    logMessage("Warning: Could not write local solar time", "orange");
+                    status = 0;
+                }
+	    if (fits_write_key(fptr, TDOUBLE, "HOURANG", &ha, "Hour angle for coordinate conversion", &status)) {
+                    logMessage("Warning: Could not write hour angle", "orange");
+                    status = 0;
+                }
             // Write calculated RA/DEC coordinates
             if (fits_write_key(fptr, TDOUBLE, "STELLRA", &ra, "Calculated RA from Alt/Az (degrees)", &status) ||
                 fits_write_key(fptr, TDOUBLE, "STELLDEC", &dec, "Calculated Dec from Alt/Az (degrees)", &status)) {
@@ -612,150 +633,3 @@ bool StellinaProcessor::writeStellinaMetadataWithCoordinates(const QString &fits
     
     return true;
 }
-
-/*
-  
-// Enhanced function to write both Alt/Az AND converted RA/DEC to FITS headers
-bool StellinaProcessor::writeStellinaMetadataWithCoordinates(const QString &fitsPath, const StellinaImageData &imageData) {
-    fitsfile *fptr = nullptr;
-    int status = 0;
-    
-    QByteArray pathBytes = fitsPath.toLocal8Bit();
-    if (fits_open_file(&fptr, pathBytes.data(), READWRITE, &status)) {
-        logMessage(QString("Failed to open FITS file for metadata writing: %1 (status: %2)").arg(fitsPath).arg(status), "red");
-        return false;
-    }
-    
-    // Clean existing Stellina keywords first
-    fits_close_file(fptr, &status);
-    cleanExistingStellinaKeywords(fitsPath);
-    
-    // Reopen for writing
-    if (fits_open_file(&fptr, pathBytes.data(), READWRITE, &status)) {
-        logMessage(QString("Failed to reopen FITS file for metadata writing: %1").arg(fitsPath), "red");
-        return false;
-    }
-    
-    // Write original Stellina Alt/Az coordinates
-    double alt = imageData.altitude;
-    double az = imageData.azimuth;
-    
-    if (fits_write_key(fptr, TDOUBLE, "STELLALT", &alt, "Stellina altitude (degrees)", &status) ||
-        fits_write_key(fptr, TDOUBLE, "STELLAZ", &az, "Stellina azimuth (degrees)", &status)) {
-        logMessage("Warning: Could not write Stellina Alt/Az coordinates to FITS header", "orange");
-        status = 0; // Continue anyway
-    }
-    
-    // Convert Alt/Az to RA/DEC and write to header
-    double ra, dec;
-    if (imageData.hasValidCoordinates && !imageData.dateObs.isEmpty()) {
-        if (convertAltAzToRaDec(imageData.altitude, imageData.azimuth, imageData.dateObs, ra, dec)) {
-            // Write calculated RA/DEC coordinates
-            if (fits_write_key(fptr, TDOUBLE, "STELLRA", &ra, "Calculated RA from Alt/Az (degrees)", &status) ||
-                fits_write_key(fptr, TDOUBLE, "STELLDEC", &dec, "Calculated Dec from Alt/Az (degrees)", &status)) {
-                logMessage("Warning: Could not write calculated RA/DEC to FITS header", "orange");
-                status = 0;
-            } else {
-                if (m_debugMode) {
-                    logMessage(QString("Wrote calculated coordinates: RA=%1°, Dec=%2°")
-                                  .arg(ra, 0, 'f', 6).arg(dec, 0, 'f', 6), "gray");
-                }
-                
-                // Write coordinate conversion metadata
-                QString obsLocation = m_observerLocation;
-                QByteArray locationBytes = obsLocation.toLocal8Bit();
-                char* locationPtr = locationBytes.data();
-                if (fits_write_key(fptr, TSTRING, "OBSLOC", &locationPtr, "Observer location for coordinate conversion", &status)) {
-                    logMessage("Warning: Could not write observer location", "orange");
-                    status = 0;
-                }
-                
-                QString conversion_method = "Alt/Az to RA/Dec from Stellina mount position";
-                QByteArray methodBytes = conversion_method.toLocal8Bit();
-                char* methodPtr = methodBytes.data();
-                if (fits_write_key(fptr, TSTRING, "COORDMET", &methodPtr, "Mount coordinate conversion method", &status)) {
-                    logMessage("Warning: Could not write conversion method", "orange");
-                    status = 0;
-                }
-            }
-        } else {
-            logMessage("Warning: Failed to convert Alt/Az to RA/DEC during metadata writing", "orange");
-        }
-    } else {
-        logMessage("Warning: Cannot convert coordinates - missing valid Alt/Az or observation time", "orange");
-    }
-    
-    // Write original file paths (relative names only for portability)
-    QString origFitsRelative = QFileInfo(imageData.originalFitsPath).fileName();
-    QString origJsonRelative = QFileInfo(imageData.originalJsonPath).fileName();
-    
-    QByteArray origFitsBytes = origFitsRelative.toLocal8Bit();
-    QByteArray origJsonBytes = origJsonRelative.toLocal8Bit();
-    char* origFitsPtr = origFitsBytes.data();
-    char* origJsonPtr = origJsonBytes.data();
-    
-    if (fits_write_key(fptr, TSTRING, "STELLORIG", &origFitsPtr, "Original Stellina FITS file", &status) ||
-        fits_write_key(fptr, TSTRING, "STELLJSON", &origJsonPtr, "Original Stellina JSON file", &status)) {
-        logMessage("Warning: Could not write original file references", "orange");
-        status = 0;
-    }
-    
-    // Write exposure and temperature for easier matching
-    int exposure = imageData.exposureSeconds;
-    int temperature = imageData.temperatureKelvin;
-    
-    if (fits_write_key(fptr, TINT, "STELLEXP", &exposure, "Stellina exposure (seconds)", &status) ||
-        fits_write_key(fptr, TINT, "STELLTEMP", &temperature, "Stellina temperature (Kelvin)", &status)) {
-        logMessage("Warning: Could not write exposure/temperature metadata", "orange");
-        status = 0;
-    }
-    
-    // Write processing stage
-    QString processingStage = "COORDINATES_CALCULATED";
-    QByteArray stageBytes = processingStage.toLocal8Bit();
-    char* stagePtr = stageBytes.data();
-    
-    if (fits_write_key(fptr, TSTRING, "STELLSTG", &stagePtr, "Stellina processing stage", &status)) {
-        logMessage("Warning: Could not write processing stage", "orange");
-        status = 0;
-    }
-    
-    // Write processing timestamp
-    QString timestamp = QDateTime::currentDateTime().toString(Qt::ISODate);
-    QByteArray timestampBytes = timestamp.toLocal8Bit();
-    char* timestampPtr = timestampBytes.data();
-    
-    if (fits_write_key(fptr, TSTRING, "STELLTS", &timestampPtr, "Stellina processing timestamp", &status)) {
-        logMessage("Warning: Could not write timestamp", "orange");
-        status = 0;
-    }
-    
-    // Add comprehensive processing history
-    QString historyComment = QString("Stellina mount coordinates: Alt=%.2f°, Az=%.2f°, Est_RA=%.6f°, Est_Dec=%.6f°, Exp=%1s")
-                                .arg(exposure)
-                                .arg(imageData.altitude)
-                                .arg(imageData.azimuth)
-                                .arg(ra)
-                                .arg(dec);
-    QByteArray historyBytes = historyComment.toLocal8Bit();
-    if (fits_write_history(fptr, historyBytes.data(), &status)) {
-        // Non-critical error
-        logMessage("Warning: Could not write processing history", "orange");
-        status = 0;
-    }
-    
-    fits_close_file(fptr, &status);
-    
-    if (status != 0) {
-        logMessage(QString("FITS error during metadata writing (error: %1)").arg(status), "red");
-        return false;
-    }
-    
-    if (m_debugMode) {
-        logMessage(QString("Wrote complete Stellina metadata with mount coordinates to: %1").arg(QFileInfo(fitsPath).fileName()), "gray");
-    }
-    
-    return true;
-}
-
- */
