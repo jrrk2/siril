@@ -1,4 +1,5 @@
 #include "StellinaProcessor.h"
+#include "CoordinateUtils.h"
 #include <QStatusBar>
 #include <QMenuBar>
 #include <QMenu>
@@ -379,7 +380,6 @@ void StellinaProcessor::setupMenu() {
     toolsMenu->addAction("Diagnose Coordinate conversion", this, &StellinaProcessor::testFixedCoordinateConversion);
     toolsMenu->addAction("Diagnose Tracking Issue", this, &StellinaProcessor::diagnoseTrackingIssue);
     toolsMenu->addAction("Analyze Coordinate errors", this, &StellinaProcessor::analyzeRealCoordinateErrors);
-    toolsMenu->addAction("Test All Coordinate Variations", this, &StellinaProcessor::testAllCoordinateVariations);
     toolsMenu->addAction("Test Time Drift Fix", this, &StellinaProcessor::testTimeDriftFix);
     toolsMenu->addAction("analyzeRealStellinaIssue", this, &StellinaProcessor::analyzeRealStellinaIssue);
     toolsMenu->addAction("testRealisticAccuracy", this, &StellinaProcessor::testRealisticAccuracy);
@@ -647,9 +647,13 @@ void StellinaProcessor::onTestConversion() {
         obsTime.setTimeSpec(Qt::UTC);
         
         if (obsTime.isValid()) {
-            double jd = calculateJD(obsTime.date().year(), obsTime.date().month(), obsTime.date().day(),
-                                   obsTime.time().hour(), obsTime.time().minute(), obsTime.time().second());
-            double lst = calculateLST(jd, lon);
+            double jd = CoordinateUtils::computeJulianDay(obsTime.date().year(),
+                                                          obsTime.date().month(),
+                                                          obsTime.date().day(),
+                                                          obsTime.time().hour(),
+                                                          obsTime.time().minute(),
+                                                          obsTime.time().second());
+            double lst = calculateLST_HighPrecision(jd, lon);
             
             debugLog("");
             debugLog("Additional Info:");

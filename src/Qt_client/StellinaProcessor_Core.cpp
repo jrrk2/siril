@@ -84,61 +84,6 @@ StellinaProcessor::~StellinaProcessor() {
 
 // Constants
 const double PI = 3.14159265358979323846;
-const double DEG_TO_RAD = PI / 180.0;
-const double RAD_TO_DEG = 180.0 / PI;
-
-// Function to calculate Julian Date (JD) from a given Gregorian date
-double StellinaProcessor::calculateJD(int year, int month, int day, int hour, int minute, int second) {
-    int A = (14 - month) / 12;
-    int Y = year + 4800 - A;
-    int M = month + 12 * A - 3;
-
-    double JD = day + ((153 * M + 2) / 5) + 365 * Y + Y / 4 - Y / 100 + Y / 400 - 32045;
-    JD += hour / 24.0 + minute / 1440.0 + second / 86400.0;
-    return JD;
-}
-
-// Function to calculate Local Sidereal Time (LST) from Julian Date (JD) and observer's longitude
-double StellinaProcessor::calculateLST(double JD, double longitude) {
-    // Calculate Julian Century (T)
-    double T = (JD - 2451545.0) / 36525.0;
-
-    // Calculate Greenwich Sidereal Time (GST)
-    double GST = 280.46061837 + 360.98564736629 * (JD - 2451545.0) + T * T * (0.000387933 - T / 38710000.0);
-    GST = fmod(GST, 360.0);  // Ensure GST is between 0 and 360 degrees
-
-    // Convert to Local Sidereal Time (LST) by adding observer's longitude
-    double LST = GST + longitude;  // Longitude in degrees
-    LST = fmod(LST, 360.0);  // Ensure LST is between 0 and 360 degrees
-
-    // Convert LST to hours
-    LST /= 15.0;  // 15 degrees = 1 hour
-
-    // Ensure LST is between 0 and 24 hours
-    if (LST < 0) LST += 24.0;
-    return LST;
-}
-
-void StellinaProcessor::altAzToRaDec(double alt, double az, double lat, double lst, double &ra, double &dec) {
-    // Convert Alt/Az to radians
-    alt *= DEG_TO_RAD;
-    az *= DEG_TO_RAD;
-    lat *= DEG_TO_RAD;
-
-    // Calculate Declination
-    dec = asin(sin(alt) * sin(lat) + cos(alt) * cos(lat) * cos(az));
-
-    // Calculate Hour Angle
-    double H = atan2(sin(az), cos(az) * sin(lat) - tan(dec) * cos(lat));
-
-    // Convert back to degrees
-    ra = lst * 15.0 - H * RAD_TO_DEG;
-    dec *= RAD_TO_DEG;
-
-    // Ensure RA is between 0 and 360 degrees
-    if (ra < 0) ra += 360;
-    if (ra >= 360) ra -= 360;
-}
 
 // Add this test function to verify the fix works
 void StellinaProcessor::testFixedCoordinateConversion() {
@@ -164,18 +109,18 @@ void StellinaProcessor::testFixedCoordinateConversion() {
         QDateTime obsTime = QDateTime::fromString(timeStr, "yyyy-MM-ddThh:mm:ss");
         obsTime.setTimeSpec(Qt::UTC);
         
-        double jd = calculateJD(obsTime.date().year(),
+        double jd = CoordinateUtils::computeJulianDay(obsTime.date().year(),
                                obsTime.date().month(), 
                                obsTime.date().day(),
                                obsTime.time().hour(),
                                obsTime.time().minute(),
                                obsTime.time().second());
         
-        double lst = calculateLST(jd, -0.1278);  // London longitude
+        double lst = calculateLST_HighPrecision(jd, -0.1278);  // London longitude
         
-        double ra, dec;
-        altAzToRaDec(testAlt, testAz, testLat, lst, ra, dec);
-        
+        auto [raNow, decNow, ha] = CoordinateUtils::altAzToRaDec(testAlt, testAz, testLat, 0, lst);
+        auto [ra, dec] = CoordinateUtils::jNowToJ2000(raNow, decNow);
+
         if (i == 0) {
             referenceRA = ra;
             logMessage(QString("Time %1: RA=%2°, Dec=%3° (reference)")
@@ -426,361 +371,6 @@ void StellinaProcessor::analyzeRealCoordinateErrors() {
     logMessage("1. Use mount coordinates as initial guess for plate solving", "green");
     logMessage("2. Plate solver finds precise astrometric solution", "green");
     logMessage("3. The difference shows mount pointing errors (expected)", "green");
-}
-// Debug and fix the coordinate system issue
-
-void StellinaProcessor::debugCoordinateSystem() {
-    logMessage("=== COORDINATE SYSTEM DEBUG ===", "blue");
-    
-    // Test case from your data:
-    // Alt=42.0410°, Az=286.8526° should give RA≈10.67°, not 191.94°
-    
-    double testAlt = 42.0410;
-    double testAz = 286.8526;
-    double expectedRA = 10.6760;
-    double expectedDec = 41.2734;
-    QString testTime = "2024-01-09T22:13:29";
-    
-    logMessage(QString("Test case: Alt=%1°, Az=%2°").arg(testAlt).arg(testAz), "gray");
-    logMessage(QString("Expected result: RA=%1°, Dec=%2°").arg(expectedRA).arg(expectedDec), "gray");
-    logMessage("", "gray");
-    
-    // Parse time and calculate LST
-    QDateTime obsTime = QDateTime::fromString(testTime, "yyyy-MM-ddThh:mm:ss");
-    obsTime.setTimeSpec(Qt::UTC);
-    
-    double jd = calculateJD(obsTime.date().year(), obsTime.date().month(), obsTime.date().day(),
-                           obsTime.time().hour(), obsTime.time().minute(), obsTime.time().second());
-    
-    double observer_lat = 51.5074;
-    double observer_lon = -0.1278;
-    double lst = calculateLST(jd, observer_lon);
-    
-    logMessage(QString("LST = %1 hours (%2°)").arg(lst, 0, 'f', 4).arg(lst * 15.0, 0, 'f', 2), "gray");
-    
-    // Test different azimuth conventions
-    logMessage("=== TESTING AZIMUTH CONVENTIONS ===", "blue");
-    
-    QStringList azConventions = {
-        "North=0°, East=90° (Standard)",
-        "South=0°, West=90° (Some mounts)",
-        "North=0°, West=90° (Navigation)",
-        "East=0°, North=90° (Math convention)"
-    };
-    
-    QList<double> testAzimuths = {
-        testAz,           // Original
-        testAz + 180,     // Flip N/S
-        360 - testAz,     // Flip E/W  
-        testAz + 90       // Rotate 90°
-    };
-    
-    for (int i = 0; i < azConventions.size(); ++i) {
-        double ra, dec;
-        altAzToRaDec_Debug(testAlt, testAzimuths[i], observer_lat, lst, ra, dec, azConventions[i]);
-        
-        double raError = qAbs(ra - expectedRA);
-        if (raError > 180) raError = 360 - raError; // Handle wrap-around
-        
-        logMessage(QString("%1: Az=%2° → RA=%3°, Dec=%4° (RA error: %5°)")
-                      .arg(azConventions[i])
-                      .arg(testAzimuths[i], 0, 'f', 1)
-                      .arg(ra, 0, 'f', 2)
-                      .arg(dec, 0, 'f', 2)
-                      .arg(raError, 0, 'f', 1), 
-                  (raError < 1.0) ? "green" : "gray");
-    }
-    
-    // Test hour angle sign
-    logMessage("\n=== TESTING HOUR ANGLE SIGN ===", "blue");
-    
-    double ra1, dec1, ra2, dec2;
-    altAzToRaDec_HourAngleTest(testAlt, testAz, observer_lat, lst, ra1, dec1, true);   // LST - H
-    altAzToRaDec_HourAngleTest(testAlt, testAz, observer_lat, lst, ra2, dec2, false);  // LST + H
-    
-    double error1 = qAbs(ra1 - expectedRA);
-    double error2 = qAbs(ra2 - expectedRA); 
-    if (error1 > 180) error1 = 360 - error1;
-    if (error2 > 180) error2 = 360 - error2;
-    
-    logMessage(QString("RA = LST - H: %1° (error: %2°)").arg(ra1, 0, 'f', 2).arg(error1, 0, 'f', 2), 
-              (error1 < error2) ? "green" : "gray");
-    logMessage(QString("RA = LST + H: %1° (error: %2°)").arg(ra2, 0, 'f', 2).arg(error2, 0, 'f', 2),
-              (error2 < error1) ? "green" : "gray");
-}
-
-void StellinaProcessor::altAzToRaDec_Debug(double alt, double az, double lat, double lst, 
-                                          double &ra, double &dec, const QString &convention) {
-    // Convert to radians
-    alt *= DEG_TO_RAD;
-    az *= DEG_TO_RAD;
-    lat *= DEG_TO_RAD;
-
-    // Calculate Declination (this should be consistent across conventions)
-    dec = asin(sin(alt) * sin(lat) + cos(alt) * cos(lat) * cos(az));
-
-    // Calculate Hour Angle
-    double H = atan2(sin(az), cos(az) * sin(lat) - tan(dec) * cos(lat));
-
-    // Convert back to degrees
-    dec *= RAD_TO_DEG;
-    double H_degrees = H * RAD_TO_DEG;
-    
-    // Calculate RA
-    ra = lst * 15.0 - H_degrees;
-
-    // Normalize RA to [0, 360)
-    while (ra < 0) ra += 360.0;
-    while (ra >= 360.0) ra -= 360.0;
-}
-
-void StellinaProcessor::altAzToRaDec_HourAngleTest(double alt, double az, double lat, double lst, 
-                                                  double &ra, double &dec, bool subtractH) {
-    // Convert to radians
-    alt *= DEG_TO_RAD;
-    az *= DEG_TO_RAD;
-    lat *= DEG_TO_RAD;
-
-    // Calculate Declination
-    dec = asin(sin(alt) * sin(lat) + cos(alt) * cos(lat) * cos(az));
-
-    // Calculate Hour Angle
-    double H = atan2(sin(az), cos(az) * sin(lat) - tan(dec) * cos(lat));
-
-    // Convert back to degrees
-    dec *= RAD_TO_DEG;
-    double H_degrees = H * RAD_TO_DEG;
-    
-    // Test both sign conventions
-    if (subtractH) {
-        ra = lst * 15.0 - H_degrees;  // Standard: RA = LST - H
-    } else {
-        ra = lst * 15.0 + H_degrees;  // Alternative: RA = LST + H
-    }
-
-    // Normalize RA to [0, 360)
-    while (ra < 0) ra += 360.0;
-    while (ra >= 360.0) ra -= 360.0;
-}
-
-// Test the correct NOVAS/SOFA algorithm
-void StellinaProcessor::altAzToRaDec_Standard(double alt, double az, double lat, double lst, double &ra, double &dec) {
-    // Standard astronomical algorithm (based on NOVAS/SOFA)
-    // This should match solve-field results
-    
-    // Convert degrees to radians
-    const double alt_rad = alt * DEG_TO_RAD;
-    const double az_rad = az * DEG_TO_RAD;
-    const double lat_rad = lat * DEG_TO_RAD;
-    
-    // Calculate sine of declination
-    const double sin_dec = sin(alt_rad) * sin(lat_rad) + cos(alt_rad) * cos(lat_rad) * cos(az_rad);
-    dec = asin(sin_dec);
-    
-    // Calculate cosine and sine of hour angle
-    const double cos_dec = cos(dec);
-    const double cos_H = (sin(alt_rad) - sin(lat_rad) * sin_dec) / (cos(lat_rad) * cos_dec);
-    const double sin_H = -sin(az_rad) * cos(alt_rad) / cos_dec;
-    
-    // Calculate hour angle (using atan2 for proper quadrant)
-    const double H = atan2(sin_H, cos_H);
-    
-    // Convert to degrees
-    dec *= RAD_TO_DEG;
-    const double H_deg = H * RAD_TO_DEG;
-    
-    // Calculate right ascension: RA = LST - H
-    ra = lst * 15.0 - H_deg;
-    
-    // Normalize RA to [0, 360) range
-    while (ra < 0.0) ra += 360.0;
-    while (ra >= 360.0) ra -= 360.0;
-    
-    if (m_debugMode) {
-        logMessage(QString("Standard algorithm: H=%1°, LST=%2h, RA=%3°, Dec=%4°")
-                      .arg(H_deg, 0, 'f', 2)
-                      .arg(lst, 0, 'f', 4)  
-                      .arg(ra, 0, 'f', 4)
-                      .arg(dec, 0, 'f', 4), "blue");
-    }
-}
-
-// Stellina-specific coordinate fix
-void StellinaProcessor::altAzToRaDec_StellinaFixed(double alt, double az, double lat, double lst, double &ra, double &dec) {
-    // Stellina might use a different azimuth convention
-    // Try common alternatives that could cause 180° errors:
-    
-    // 1. Check if Stellina uses South=0° instead of North=0°
-    double corrected_az = az;
-    
-    // Common mount azimuth corrections:
-    // Option 1: Stellina Az might be measured from South (add 180°)
-    // Option 2: Stellina Az might be West-positive (360° - az)  
-    // Option 3: Stellina might have a constant offset
-    
-    // Test: If solve-field shows RA≈10.67° and we calculate 191.94°, 
-    // the difference is ~181°, suggesting South vs North reference
-    
-    // Try South=0° convention (add 180° to azimuth)
-    corrected_az = az + 180.0;
-    if (corrected_az >= 360.0) corrected_az -= 360.0;
-    
-    if (m_debugMode) {
-        logMessage(QString("Testing Stellina Az correction: %1° → %2°").arg(az).arg(corrected_az), "orange");
-    }
-    
-    // Use standard algorithm with corrected azimuth
-    altAzToRaDec_Standard(alt, corrected_az, lat, lst, ra, dec);
-}
-
-// Test all variations
-void StellinaProcessor::testAllCoordinateVariations() {
-    logMessage("=== TESTING ALL COORDINATE VARIATIONS ===", "blue");
-    
-    double testAlt = 42.0410;
-    double testAz = 286.8526;
-    double expectedRA = 10.6760;
-    double expectedDec = 41.2734;
-    QString testTime = "2024-01-09T22:13:29";
-    
-    QDateTime obsTime = QDateTime::fromString(testTime, "yyyy-MM-ddThh:mm:ss");
-    obsTime.setTimeSpec(Qt::UTC);
-    
-    double jd = calculateJD(obsTime.date().year(), obsTime.date().month(), obsTime.date().day(),
-                           obsTime.time().hour(), obsTime.time().minute(), obsTime.time().second());
-    
-    double observer_lat = 51.5074;
-    double observer_lon = -0.1278;
-    double lst = calculateLST(jd, observer_lon);
-    
-    struct TestVariation {
-        QString name;
-        double az_input;
-        QString description;
-    };
-    
-    QList<TestVariation> variations = {
-        {"Original", testAz, "Stellina Az as-is"},
-        {"South=0°", testAz + 180, "Add 180° (South reference)"},
-        {"West=+", 360 - testAz, "Mirror E/W (West positive)"},
-        {"Offset +90°", testAz + 90, "90° offset"},
-        {"Offset -90°", testAz - 90, "90° offset (other direction)"},
-        {"Mirror about 180°", 360 - (testAz - 180), "Mirror about South"}
-    };
-    
-    for (const TestVariation &var : variations) {
-        double corrected_az = var.az_input;
-        while (corrected_az < 0) corrected_az += 360;
-        while (corrected_az >= 360) corrected_az -= 360;
-        
-        double ra, dec;
-        altAzToRaDec_Standard(testAlt, corrected_az, observer_lat, lst, ra, dec);
-        
-        double raError = qAbs(ra - expectedRA);
-        if (raError > 180) raError = 360 - raError;
-        double decError = qAbs(dec - expectedDec);
-        
-        logMessage(QString("%1: Az=%2° → RA=%3°, Dec=%4° (errors: RA=%5°, Dec=%6°)")
-                      .arg(var.name, -15)
-                      .arg(corrected_az, 0, 'f', 1)
-                      .arg(ra, 0, 'f', 2)
-                      .arg(dec, 0, 'f', 2)
-                      .arg(raError, 0, 'f', 2)
-                      .arg(decError, 0, 'f', 2),
-                  (raError < 1.0 && decError < 1.0) ? "green" : "gray");
-    }
-}
-// FIXED: Stellina Coordinate Conversion
-// Replace your convertAltAzToRaDec function with this corrected version
-
-// Also add this diagnostic function to verify the fix
-void StellinaProcessor::testStellinaAzimuthConvention() {
-    logMessage("=== TESTING STELLINA AZIMUTH CONVENTION FIX ===", "blue");
-    
-    // Test case from your data
-    double testAlt = 42.0410;
-    double testAz = 286.8526;
-    double expectedRA = 10.6760;  // From solve-field
-    double expectedDec = 41.2734;
-    QString testTime = "2024-01-09T22:13:29";
-    
-    // Test original (broken) conversion
-    double ra1, dec1;
-    QDateTime obsTime = QDateTime::fromString(testTime, "yyyy-MM-ddThh:mm:ss");
-    obsTime.setTimeSpec(Qt::UTC);
-    double jd = calculateJD(obsTime.date().year(), obsTime.date().month(), obsTime.date().day(),
-                           obsTime.time().hour(), obsTime.time().minute(), obsTime.time().second());
-    double lst = calculateLST(jd, -0.1278);
-    
-    // Original method (broken)
-    altAzToRaDec_Standard(testAlt, testAz, 51.5074, lst, ra1, dec1);
-    
-    // Fixed method (West-positive convention)
-    double corrected_az = 360.0 - testAz;
-    if (corrected_az >= 360.0) corrected_az -= 360.0;
-    double ra2, dec2;
-    altAzToRaDec_Standard(testAlt, corrected_az, 51.5074, lst, ra2, dec2);
-    
-    // Calculate errors
-    double error1_ra = qAbs(ra1 - expectedRA);
-    double error1_dec = qAbs(dec1 - expectedDec);
-    double error2_ra = qAbs(ra2 - expectedRA);  
-    double error2_dec = qAbs(dec2 - expectedDec);
-    
-    // Handle RA wrap-around
-    if (error1_ra > 180) error1_ra = 360 - error1_ra;
-    if (error2_ra > 180) error2_ra = 360 - error2_ra;
-    
-    logMessage(QString("Test input: Alt=%1°, Az=%2° at %3")
-                  .arg(testAlt, 0, 'f', 4)
-                  .arg(testAz, 0, 'f', 4)
-                  .arg(testTime), "gray");
-    logMessage(QString("Expected from solve-field: RA=%1°, Dec=%2°")
-                  .arg(expectedRA, 0, 'f', 4)
-                  .arg(expectedDec, 0, 'f', 4), "orange");
-    logMessage("", "gray");
-    
-    logMessage("ORIGINAL METHOD (Standard Az=0°N, 90°E):", "red");
-    logMessage(QString("  Result: RA=%1°, Dec=%2°")
-                  .arg(ra1, 0, 'f', 4)
-                  .arg(dec1, 0, 'f', 4), "red");
-    logMessage(QString("  Error: RA=%1°, Dec=%2°")
-                  .arg(error1_ra, 0, 'f', 4)
-                  .arg(error1_dec, 0, 'f', 4), "red");
-    logMessage("", "gray");
-    
-    logMessage("FIXED METHOD (Stellina West-positive):", "green");
-    logMessage(QString("  Stellina Az=%1° → Standard Az=%2°")
-                  .arg(testAz, 0, 'f', 4)
-                  .arg(corrected_az, 0, 'f', 4), "blue");
-    logMessage(QString("  Result: RA=%1°, Dec=%2°")
-                  .arg(ra2, 0, 'f', 4)
-                  .arg(dec2, 0, 'f', 4), "green");
-    logMessage(QString("  Error: RA=%1°, Dec=%2°")
-                  .arg(error2_ra, 0, 'f', 4)
-                  .arg(error2_dec, 0, 'f', 4), 
-              (error2_ra < 1.0 && error2_dec < 1.0) ? "green" : "orange");
-    
-    logMessage("", "gray");
-    logMessage("IMPROVEMENT:", "blue");
-    logMessage(QString("  RA error reduced from %1° to %2° (improvement: %3°)")
-                  .arg(error1_ra, 0, 'f', 2)
-                  .arg(error2_ra, 0, 'f', 2)
-                  .arg(error1_ra - error2_ra, 0, 'f', 2), "blue");
-    logMessage(QString("  Dec error reduced from %1° to %2° (improvement: %3°)")
-                  .arg(error1_dec, 0, 'f', 2)
-                  .arg(error2_dec, 0, 'f', 2)
-                  .arg(error1_dec - error2_dec, 0, 'f', 2), "blue");
-    
-    if (error2_ra < 1.0 && error2_dec < 1.0) {
-        logMessage("✓ SUCCESS: Fixed conversion is within 1° tolerance!", "green");
-        logMessage("The Stellina telescope uses West-positive azimuth convention.", "green");
-    } else {
-        logMessage("⚠ PARTIAL: Significant improvement but still some error", "orange");
-        logMessage("May need additional calibration or different convention", "orange");
-    }
-    
-    logMessage("=== END STELLINA AZIMUTH CONVENTION TEST ===", "blue");
 }
 
 QString StellinaProcessor::extractDateObs(const QString &fitsFile) {
@@ -2749,7 +2339,7 @@ void StellinaProcessor::diagnoseSiderealTimeIssues() {
     }
     
     // Calculate Julian Date
-    double jd = calculateJD(obsTime.date().year(),
+    double jd = CoordinateUtils::computeJulianDay(obsTime.date().year(),
                            obsTime.date().month(),
                            obsTime.date().day(),
                            obsTime.time().hour(),
@@ -2757,7 +2347,7 @@ void StellinaProcessor::diagnoseSiderealTimeIssues() {
                            obsTime.time().second());
     
     // Calculate Local Sidereal Time
-    double lst = calculateLST(jd, testLon);
+    double lst = calculateLST_HighPrecision(jd, testLon);
     
     logMessage(QString("Test Time: %1 UTC").arg(obsTime.toString(Qt::ISODate)), "gray");
     logMessage(QString("Observer: %1°N, %2°E").arg(testLat, 0, 'f', 4).arg(testLon, 0, 'f', 4), "gray");
@@ -2870,37 +2460,8 @@ void StellinaProcessor::diagnoseSiderealTimeIssues() {
     logMessage("=== END DIAGNOSTIC ===", "blue");
 }
 
-// HIGH-PRECISION SIDEREAL TIME CALCULATION
-// This fixes the time drift issue seen in your plot
 double StellinaProcessor::calculateLST_HighPrecision(double JD, double longitude) {
-    // High-precision calculation based on Meeus "Astronomical Algorithms"
-    // This should eliminate the time-dependent drift
-    
-    // Julian centuries from J2000.0
-    double T = (JD - 2451545.0) / 36525.0;
-    
-    // Mean sidereal time at Greenwich (in hours)
-    // Using high-precision formula from Meeus
-    double GST = 280.46061837 +                    // Base value
-                 360.98564736629 * (JD - 2451545.0) + // Main term
-                 T * T * (0.000387933 -                // T^2 correction
-                 T / 38710000.0);                      // T^3 correction
-    
-    // Normalize to [0, 360) degrees
-    GST = fmod(GST, 360.0);
-    if (GST < 0) GST += 360.0;
-    
-    // Convert to Local Sidereal Time by adding longitude
-    double LST_degrees = GST + longitude;
-    
-    // Normalize LST to [0, 360) degrees
-    LST_degrees = fmod(LST_degrees, 360.0);
-    if (LST_degrees < 0) LST_degrees += 360.0;
-    
-    // Convert to hours
-    double LST_hours = LST_degrees / 15.0;
-    
-    return LST_hours;
+    return CoordinateUtils::localSiderealTime(longitude, JD);
 }
 
 // DIAGNOSTIC: Test the LST calculation accuracy
@@ -2925,11 +2486,11 @@ void StellinaProcessor::diagnoseLSTAccuracy() {
         QDateTime obsTime = QDateTime::fromString(testTimes[i], "yyyy-MM-ddThh:mm:ss");
         obsTime.setTimeSpec(Qt::UTC);
         
-        double jd = calculateJD(obsTime.date().year(), obsTime.date().month(), obsTime.date().day(),
+        double jd = CoordinateUtils::computeJulianDay(obsTime.date().year(), obsTime.date().month(), obsTime.date().day(),
                                obsTime.time().hour(), obsTime.time().minute(), obsTime.time().second());
         
         // Test both old and new LST calculations
-        double oldLST = calculateLST(jd, observer_lon);           // Your original
+        double oldLST = calculateLST_HighPrecision(jd, observer_lon);           // Your original
         double newLST = calculateLST_HighPrecision(jd, observer_lon);  // High precision
         
         if (i == 0) {
@@ -3380,7 +2941,7 @@ void StellinaProcessor::dumpCoordinateDataToCSV() {
         double minutesElapsed = startTime.msecsTo(obsTime) / 60000.0;
         
         // Calculate Julian Day and LST for debugging
-        double jd = calculateJD(obsTime.date().year(), obsTime.date().month(), obsTime.date().day(),
+        double jd = CoordinateUtils::computeJulianDay(obsTime.date().year(), obsTime.date().month(), obsTime.date().day(),
                                obsTime.time().hour(), obsTime.time().minute(), obsTime.time().second());
         double lst = calculateLST_HighPrecision(jd, -0.1278);
         
@@ -4126,12 +3687,6 @@ bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString
                            obsTime.time().second());
     
     double lst = calculateLST_HighPrecision(jd, observer_lon);
-    
-    /*    
-    // Convert Alt/Az to RA/Dec using standard algorithm
-    altAzToRaDec(correctedAlt, correctedAz, observer_lat, lst, ra, dec);
-    */
-
     // Calculate RA/Dec from Alt/Az using the CoordinateUtils class
     // Convert horizontal to equatorial
     auto [raNow, decNow, ha] = CoordinateUtils::altAzToRaDec(correctedAlt, correctedAz, observer_lat, observer_lon, lst);

@@ -300,13 +300,6 @@ private:
     bool convertAltAzToRaDec(double alt, double az, const QString &dateObs, double &ra, double &dec);
     bool checkStellinaQuality(const QJsonObject &json);
     QString getStageDescription() const;
-    void altAzToRaDec_Debug(double alt, double az, double lat, double lst, 
-                           double &ra, double &dec, const QString &convention);
-    void altAzToRaDec_HourAngleTest(double alt, double az, double lat, double lst, 
-                                   double &ra, double &dec, bool subtractH);
-    void altAzToRaDec_Standard(double alt, double az, double lat, double lst, double &ra, double &dec);
-    void altAzToRaDec_StellinaFixed(double alt, double az, double lat, double lst, double &ra, double &dec);
-    void testAllCoordinateVariations();
     void runCoordinateTestSuite();
     void testSingleCoordinate(const CoordinateTestCase &testCase);
     QList<CoordinateTestCase> getCoordinateTestCases();
@@ -395,9 +388,6 @@ private:
                              double expectedRA = 0.0, double expectedDec = 0.0,
                              double currentRA = 0.0, double currentDec = 0.0,
                              double testLat = 0.0, double testLon = 0.0);
-    double calculateJD(int year, int month, int day, int hour, int minute, int second);
-    double calculateLST(double JD, double longitude);
-    void altAzToRaDec(double alt, double az, double lat, double lst, double &ra, double &dec);
     bool runSolveField(const QString &fitsPath, const QString &outputPath, double ra, double dec);
     bool checkSolveFieldInstalled();
     bool createBinnedImageForPlatesolving(const QString &inputPath, const QString &binnedPath);
