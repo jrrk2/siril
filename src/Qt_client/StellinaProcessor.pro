@@ -49,6 +49,7 @@ SOURCES += \
     StellinaProcessor_Utils.cpp \
     StellinaProcessor_WCS_Integration.cpp \
     WcsAstrometricStacker.cpp \
+    CoordinateUtils.cpp \
     
 # Header files
 HEADERS += \

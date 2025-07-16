@@ -161,6 +161,22 @@ struct ProcessedImageData {
     bool isValid;
 };
 
+
+struct CoordinateTestCase {
+    QString name;
+    double lat;           // Observer latitude (degrees)
+    double lon;           // Observer longitude (degrees) 
+    QString date;         // UTC date/time string
+    double julianDay;     // Julian Day
+    double raOfDate;      // RA of date (degrees)
+    double decOfDate;     // Dec of date (degrees)
+    double expectedAz;    // Expected azimuth (degrees)
+    double expectedAlt;   // Expected altitude (degrees)
+    double siderealTime;  // Local sidereal time (hours)
+    double hourAngle;     // Hour angle (hours)
+    QString description;  // Test description
+};
+
 class StellinaProcessor : public QMainWindow {
     Q_OBJECT
 
@@ -194,6 +210,13 @@ public:
     void plotMountErrors();
 
 private slots:
+    // Debug slot functions
+    void onTestConversion();
+    void onLoadImageData();
+    void onTestBatch();
+    void onRunPresetTest();
+    void onTestSkyRegion();
+  
     // UI slots
     void onSelectSourceDirectory();
     void onSelectDarkDirectory();
@@ -284,6 +307,11 @@ private:
     void altAzToRaDec_Standard(double alt, double az, double lat, double lst, double &ra, double &dec);
     void altAzToRaDec_StellinaFixed(double alt, double az, double lat, double lst, double &ra, double &dec);
     void testAllCoordinateVariations();
+    void runCoordinateTestSuite();
+    void testSingleCoordinate(const CoordinateTestCase &testCase);
+    QList<CoordinateTestCase> getCoordinateTestCases();
+    void runRandomTestSubset(int numTests = 20);
+    void runAccuracyAnalysis();
     // NEW: Reversed image support methods
     bool isReversedStellinaImage(const QString &filename);
     QString detectBayerPattern(const QString &fitsPath);
@@ -386,6 +414,29 @@ private:
     
     // Enhanced processing methods
     bool performAstrometricStackingEnhanced();
+    // NEW: Debug tab and components
+    QWidget *m_debugTab;
+    void setupDebugTab();
+    void debugLog(const QString &message) ;
+    // Debug UI components
+    QGroupBox *m_coordDebugGroup;
+    QDoubleSpinBox *m_debugAltSpin;
+    QDoubleSpinBox *m_debugAzSpin;
+    QLineEdit *m_debugTimeEdit;
+    QDoubleSpinBox *m_debugLatSpin;
+    QDoubleSpinBox *m_debugLonSpin;
+    QPushButton *m_testConversionButton;
+    QPushButton *m_loadImageDataButton;
+    QPushButton *m_testBatchButton;
+    QTextEdit *m_debugResultsEdit;
+    
+    QGroupBox *m_presetTestsGroup;
+    QComboBox *m_presetTestCombo;
+    QPushButton *m_runPresetButton;
+    
+    QGroupBox *m_skyRegionGroup;
+    QComboBox *m_skyRegionCombo;
+    QPushButton *m_testSkyRegionButton;
 
     // UI components - Main tabs
     QTabWidget *m_tabWidget;

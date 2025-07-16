@@ -1,4 +1,5 @@
 #include "StellinaProcessor.h"
+#include "CoordinateUtils.h"
 #include <QApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -4115,9 +4116,9 @@ bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString
         logMessage(QString("ERROR: Could not parse observation time '%1'").arg(dateObs), "red");
         return false;
     }
-    
+
     // Calculate Julian Date and LST
-    double jd = calculateJD(obsTime.date().year(),
+    double jd = CoordinateUtils::computeJulianDay(obsTime.date().year(),
                            obsTime.date().month(),
                            obsTime.date().day(),
                            obsTime.time().hour(),
@@ -4126,9 +4127,21 @@ bool StellinaProcessor::convertAltAzToRaDec(double alt, double az, const QString
     
     double lst = calculateLST_HighPrecision(jd, observer_lon);
     
+    /*    
     // Convert Alt/Az to RA/Dec using standard algorithm
     altAzToRaDec(correctedAlt, correctedAz, observer_lat, lst, ra, dec);
+    */
+
+    // Calculate RA/Dec from Alt/Az using the CoordinateUtils class
+    // Convert horizontal to equatorial
+    auto [raNow, decNow, ha] = CoordinateUtils::altAzToRaDec(correctedAlt, correctedAz, observer_lat, observer_lon, lst);
     
+    // Convert current epoch to J2000
+    auto [ra2000, dec2000] = CoordinateUtils::jNowToJ2000(raNow, decNow);
+
+    ra = ra2000;
+    dec = dec2000;
+   
     // Apply time-dependent drift correction if enabled
     if (m_mountTilt.enableCorrection && m_mountTilt.enableDriftCorrection && 
         m_mountTilt.sessionStart.isValid()) {
