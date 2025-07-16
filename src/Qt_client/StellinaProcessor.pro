@@ -45,6 +45,7 @@ SOURCES += \
     stellinaprocessor_plugin_import.cpp \
     StellinaProcessor_Processing.cpp \
     StellinaProcessor_Slots.cpp \
+    StellinaProcessor_Misc.cpp \
     StellinaProcessor_UI.cpp \
     StellinaProcessor_Utils.cpp \
     StellinaProcessor_WCS_Integration.cpp \

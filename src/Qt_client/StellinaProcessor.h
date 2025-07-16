@@ -208,7 +208,12 @@ public:
     void testSystematicOffsetCorrection();
     void verifySystematicOffsetsInUse();
     void plotMountErrors();
-
+    bool readAcqTimeFromFits(const QString &fitsPath, qint64 &acqTime, qint64 &refAcqTime, QDateTime &refUTCTime);
+    QDateTime reconstructUTCFromAcqTime(qint64 acqTime, qint64 refAcqTime, const QDateTime &refUTCTime);
+    bool convertAltAzToRaDecFromCalibratedFits(const QString &calibratedFitsPath, double &ra, double &dec);
+    void compareTimingAccuracy() ;
+    void validateAcqTimePreservation() ;
+				       
 private slots:
     // Debug slot functions
     void onTestConversion();
