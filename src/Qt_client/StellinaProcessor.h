@@ -252,6 +252,19 @@ private slots:
     void onSaveWCSResult();
   
 private:
+    // Session timing state
+    static QDateTime s_sessionReferenceTime;
+    static qint64 s_sessionReferenceAcqTime;
+    static bool s_sessionTimingInitialized;
+    // Method declarations only
+    void resetSessionTiming();
+    bool initializeSessionTiming(const QString &sourceDirectory);
+    QDateTime convertAcqTimeToUTC(qint64 acqTime);
+    bool convertAltAzToRaDecWithPreciseTiming(double alt, double az, const QString &jsonPath, double &ra, double &dec);
+    void validateTimingOffset();
+    void compareDriftWithDynamicOffset();
+    void updateProcessingToDynamicOffset();
+  
     // Mount tilt correction parameters
     struct MountTiltParams {
         double northTilt;           // Static north tilt θ_N in degrees (deprecated)

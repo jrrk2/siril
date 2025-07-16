@@ -4,6 +4,7 @@
 // =============================================================================
 
 #include "StellinaProcessor.h"
+#include "CoordinateUtils.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -666,3 +667,459 @@ void StellinaProcessor::loadDarkFrames() {
     }
 }
 
+
+// Static member definitions
+QDateTime StellinaProcessor::s_sessionReferenceTime;
+qint64 StellinaProcessor::s_sessionReferenceAcqTime = 0;
+bool StellinaProcessor::s_sessionTimingInitialized = false;
+
+// Method implementations
+void StellinaProcessor::resetSessionTiming() {
+    s_sessionReferenceTime = QDateTime();
+    s_sessionReferenceAcqTime = 0;
+    s_sessionTimingInitialized = false;
+}
+
+bool StellinaProcessor::initializeSessionTiming(const QString &sourceDirectory) {
+    QDir sourceDir(sourceDirectory);
+    if (!sourceDir.exists()) {
+        logMessage("Source directory does not exist", "red");
+        return false;
+    }
+    
+    // Find first image pair (FITS + JSON)
+    QStringList fitsFiles = sourceDir.entryList(QStringList() << "*.fits", QDir::Files);
+    fitsFiles.sort();
+    
+    if (fitsFiles.isEmpty()) {
+        logMessage("No FITS files found in source directory", "red");
+        return false;
+    }
+    
+    // Try each FITS file until we find one with both FITS and JSON
+    for (const QString &fitsFile : fitsFiles) {
+        QString fitsPath = sourceDir.absoluteFilePath(fitsFile);
+        QString baseName = QFileInfo(fitsFile).baseName();
+        
+        // Look for corresponding JSON file
+        QStringList jsonCandidates = {
+            baseName + "-stacking.json",
+            baseName + ".json",
+            baseName + "-stacking.JSON",
+            baseName + ".JSON"
+        };
+        
+        QString jsonPath;
+        for (const QString &candidate : jsonCandidates) {
+            QString candidatePath = sourceDir.absoluteFilePath(candidate);
+            if (QFile::exists(candidatePath)) {
+                jsonPath = candidatePath;
+                break;
+            }
+        }
+        
+        if (jsonPath.isEmpty()) {
+            continue; // Try next FITS file
+        }
+        
+        // Extract DATE-OBS from FITS
+        QString dateObs = extractDateObs(fitsPath);
+        if (dateObs.isEmpty()) {
+            continue;
+        }
+        
+        // Extract acqTime from JSON
+        QFile jsonFile(jsonPath);
+        if (!jsonFile.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        
+        QJsonDocument doc = QJsonDocument::fromJson(jsonFile.readAll());
+        QJsonObject root = doc.object();
+        
+        if (!root.contains("acqTime")) {
+            continue;
+        }
+        
+        qint64 acqTime = root["acqTime"].toVariant().toLongLong();
+        
+        // Parse DATE-OBS to QDateTime
+        QDateTime dateObsTime = QDateTime::fromString(dateObs, "yyyy-MM-ddThh:mm:ss");
+        if (!dateObsTime.isValid()) {
+            // Try alternative formats
+            QStringList formats = {
+                "yyyy-MM-ddThh:mm:ss.zzz",
+                "yyyy-MM-ddThh:mm:ss.zzzZ",
+                "yyyy-MM-dd hh:mm:ss"
+            };
+            
+            for (const QString &format : formats) {
+                dateObsTime = QDateTime::fromString(dateObs, format);
+                if (dateObsTime.isValid()) break;
+            }
+        }
+        
+        if (!dateObsTime.isValid()) {
+            continue;
+        }
+        
+        dateObsTime.setTimeSpec(Qt::UTC);
+        
+        // Successfully found reference pair - initialize session timing
+        s_sessionReferenceTime = dateObsTime;
+        s_sessionReferenceAcqTime = acqTime;
+        s_sessionTimingInitialized = true;
+        
+        logMessage(QString("Session timing initialized from %1:").arg(baseName), "blue");
+        logMessage(QString("  DATE-OBS: %1").arg(dateObsTime.toString("yyyy-MM-ddThh:mm:ss")), "blue");
+        logMessage(QString("  acqTime:  %1").arg(acqTime), "blue");
+        
+        return true;
+    }
+    
+    logMessage("Could not find valid FITS+JSON pair for timing initialization", "red");
+    return false;
+}
+
+QDateTime StellinaProcessor::convertAcqTimeToUTC(qint64 acqTime) {
+    if (!s_sessionTimingInitialized) {
+        logMessage("Session timing not initialized - call initializeSessionTiming() first", "red");
+        return QDateTime();
+    }
+    
+    // Calculate time difference from reference
+    qint64 timeDifferenceMs = acqTime - s_sessionReferenceAcqTime;
+    
+    // Add difference to reference time
+    QDateTime result = s_sessionReferenceTime.addMSecs(timeDifferenceMs);
+    
+    return result;
+}
+
+bool StellinaProcessor::convertAltAzToRaDecWithPreciseTiming(double alt, double az, const QString &jsonPath, double &ra, double &dec) {
+    // Initialize session timing if not already done
+    if (!s_sessionTimingInitialized) {
+        QString sourceDir = QFileInfo(jsonPath).dir().absolutePath();
+        if (!initializeSessionTiming(sourceDir)) {
+            logMessage("Failed to initialize session timing", "red");
+            return false;
+        }
+    }
+    
+    // Parse JSON to get acqTime
+    QFile file(jsonPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (m_debugMode) {
+            logMessage(QString("Failed to open JSON file: %1").arg(jsonPath), "red");
+        }
+        return false;
+    }
+    
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    QJsonObject root = doc.object();
+    
+    if (!root.contains("acqTime")) {
+        if (m_debugMode) {
+            logMessage(QString("No acqTime in JSON: %1").arg(jsonPath), "red");
+        }
+        return false;
+    }
+    
+    // Get precise timing from acqTime using calculated offset
+    qint64 acqTime = root["acqTime"].toVariant().toLongLong();
+    QDateTime preciseUTC = convertAcqTimeToUTC(acqTime);
+    
+    if (!preciseUTC.isValid()) {
+        return false;
+    }
+    
+    // Apply mount corrections
+    double correctedAlt, correctedAz;
+    applyMountTiltCorrection(correctedAlt, correctedAz, alt, az);
+    
+    // Get observer location
+    QStringList locationParts = m_observerLocation.split(',');
+    double observer_lat = 51.5074;  // Default to London
+    double observer_lon = -0.1278;
+    
+    if (locationParts.size() >= 2) {
+        bool ok1, ok2;
+        double lat = locationParts[0].trimmed().toDouble(&ok1);
+        double lon = locationParts[1].trimmed().toDouble(&ok2);
+        if (ok1 && ok2) {
+            observer_lat = lat;
+            observer_lon = lon;
+        }
+    }
+    
+    // Use precise acqTime-derived timestamp for coordinate conversion
+    int year = preciseUTC.date().year();
+    int month = preciseUTC.date().month();
+    int day = preciseUTC.date().day();
+    int hour = preciseUTC.time().hour();
+    int minute = preciseUTC.time().minute();
+    int second = preciseUTC.time().second();
+    
+    if (m_debugMode) {
+        logMessage(QString("Precise timing: acqTime=%1 -> %2 UTC")
+                  .arg(acqTime)
+                  .arg(preciseUTC.toString("yyyy-MM-ddThh:mm:ss")), "blue");
+    }
+    
+    // Perform coordinate conversion with precise timing
+    auto [jd, ra2000, dec2000, raNow, decNow, lst, ha] = 
+        CoordinateUtils::calculateRaDec(year, month, day, hour, minute, second,
+                                       correctedAlt, correctedAz, observer_lat, observer_lon);
+    
+    // Apply systematic corrections if enabled
+    if (m_mountTilt.enableDriftCorrection) {
+        double minutesElapsed = s_sessionReferenceTime.msecsTo(preciseUTC) / 60000.0;
+        
+        double raOffset = m_mountTilt.driftRA * minutesElapsed / 3600.0;
+        double decOffset = m_mountTilt.driftDec * minutesElapsed / 3600.0;
+        
+        ra2000 += raOffset;
+        dec2000 += decOffset;
+        
+        if (m_debugMode) {
+            logMessage(QString("Applied time-based corrections: RA+=%1°, Dec+=%2° at %.1f min")
+                      .arg(raOffset, 0, 'f', 6)
+                      .arg(decOffset, 0, 'f', 6)
+                      .arg(minutesElapsed), "gray");
+        }
+    }
+    
+    ra = ra2000;
+    dec = dec2000;
+    
+    if (m_debugMode) {
+        logMessage(QString("Precise conversion: Alt=%.4f°,Az=%.4f° -> RA=%.6f°,Dec=%.6f°")
+                  .arg(correctedAlt, 0, 'f', 4)
+                  .arg(correctedAz, 0, 'f', 4)
+                  .arg(ra, 0, 'f', 6)
+                  .arg(dec, 0, 'f', 6), "green");
+    }
+    
+    return true;
+}
+
+void StellinaProcessor::validateTimingOffset() {
+    logMessage("=== VALIDATING TIMING OFFSET CALCULATION ===", "blue");
+    
+    if (m_sourceDirectory.isEmpty()) {
+        logMessage("Please select source directory first", "red");
+        return;
+    }
+    
+    // Reset and recalculate timing
+    resetSessionTiming();
+    
+    if (!initializeSessionTiming(m_sourceDirectory)) {
+        logMessage("Failed to initialize session timing", "red");
+        return;
+    }
+    
+    QDir sourceDir(m_sourceDirectory);
+    QStringList fitsFiles = sourceDir.entryList(QStringList() << "*.fits", QDir::Files);
+    fitsFiles.sort();
+    
+    logMessage("Validating acqTime conversion against DATE-OBS:", "green");
+    logMessage("Image       | acqTime    | Converted UTC     | FITS DATE-OBS     | Diff (ms)", "green");
+    logMessage("------------|------------|-------------------|-------------------|---------", "gray");
+    
+    for (int i = 0; i < qMin(fitsFiles.size(), 10); i++) {
+        QString fitsFile = fitsFiles[i];
+        QString fitsPath = sourceDir.absoluteFilePath(fitsFile);
+        QString baseName = QFileInfo(fitsFile).baseName();
+        
+        // Find corresponding JSON
+        QString jsonPath = sourceDir.absoluteFilePath(baseName + "-stacking.json");
+        if (!QFile::exists(jsonPath)) {
+            jsonPath = sourceDir.absoluteFilePath(baseName + ".json");
+        }
+        if (!QFile::exists(jsonPath)) continue;
+        
+        // Get acqTime from JSON
+        QFile jsonFile(jsonPath);
+        if (!jsonFile.open(QIODevice::ReadOnly)) continue;
+        
+        QJsonDocument doc = QJsonDocument::fromJson(jsonFile.readAll());
+        QJsonObject root = doc.object();
+        
+        if (!root.contains("acqTime")) continue;
+        
+        qint64 acqTime = root["acqTime"].toVariant().toLongLong();
+        
+        // Convert acqTime to UTC
+        QDateTime convertedUTC = convertAcqTimeToUTC(acqTime);
+        
+        // Get DATE-OBS from FITS
+        QString dateObs = extractDateObs(fitsPath);
+        QDateTime fitsUTC = QDateTime::fromString(dateObs, "yyyy-MM-ddThh:mm:ss");
+        fitsUTC.setTimeSpec(Qt::UTC);
+        
+        // Calculate difference
+        qint64 diffMs = fitsUTC.msecsTo(convertedUTC);
+        
+        logMessage(QString("%1 | %2 | %3 | %4 | %5")
+                  .arg(baseName, -11)
+                  .arg(acqTime, -10)
+                  .arg(convertedUTC.toString("yyyy-MM-ddThh:mm:ss"), -17)
+                  .arg(fitsUTC.toString("yyyy-MM-ddThh:mm:ss"), -17)
+                  .arg(diffMs, 8), 
+                  qAbs(diffMs) < 1000 ? "green" : (qAbs(diffMs) < 5000 ? "orange" : "red"));
+    }
+    
+    logMessage("", "gray");
+    logMessage("VALIDATION CRITERIA:", "blue");
+    logMessage("• Differences should be minimal (< 1000ms) for most images", "blue");
+    logMessage("• Large differences may indicate timing issues in FITS headers", "blue");
+    logMessage("• Consistent small differences are acceptable", "blue");
+}
+
+void StellinaProcessor::compareDriftWithDynamicOffset() {
+    logMessage("=== DRIFT COMPARISON WITH DYNAMIC OFFSET ===", "blue");
+    
+    if (m_sourceDirectory.isEmpty()) {
+        logMessage("Please select source directory first", "red");
+        return;
+    }
+    
+    // Reset and initialize timing
+    resetSessionTiming();
+    
+    if (!initializeSessionTiming(m_sourceDirectory)) {
+        logMessage("Failed to initialize session timing", "red");
+        return;
+    }
+    
+    QDir sourceDir(m_sourceDirectory);
+    QStringList fitsFiles = sourceDir.entryList(QStringList() << "*.fits", QDir::Files);
+    fitsFiles.sort();
+    
+    logMessage("Comparing coordinate drift between timing methods:", "green");
+    logMessage("Image      | Method    | Minutes | RA (degrees) | RA Drift | Dec (degrees) | Dec Drift", "green");
+    logMessage("-----------|-----------|---------|--------------|----------|---------------|----------", "gray");
+    
+    double firstRA_DateObs = 0, firstDec_DateObs = 0;
+    double firstRA_AcqTime = 0, firstDec_AcqTime = 0;
+    QDateTime startTime = s_sessionReferenceTime;
+    
+    for (int i = 0; i < qMin(fitsFiles.size(), 10); i++) {
+        QString fitsFile = fitsFiles[i];
+        QString fitsPath = sourceDir.absoluteFilePath(fitsFile);
+        QString baseName = QFileInfo(fitsFile).baseName();
+        
+        // Find corresponding JSON
+        QString jsonPath = sourceDir.absoluteFilePath(baseName + "-stacking.json");
+        if (!QFile::exists(jsonPath)) {
+            jsonPath = sourceDir.absoluteFilePath(baseName + ".json");
+        }
+        if (!QFile::exists(jsonPath)) continue;
+        
+        // Get coordinates from JSON
+        QJsonObject metadata = loadStellinaJson(jsonPath);
+        double alt, az;
+        if (!extractCoordinates(metadata, alt, az)) continue;
+        
+        // METHOD 1: Using DATE-OBS (current method with drift)
+        QString dateObs = extractDateObs(fitsPath);
+        double ra_dateobs, dec_dateobs;
+        bool dateObsSuccess = convertAltAzToRaDec(alt, az, dateObs, ra_dateobs, dec_dateobs);
+        
+        // METHOD 2: Using acqTime with dynamic offset
+        double ra_acqtime, dec_acqtime;
+        bool acqTimeSuccess = convertAltAzToRaDecWithPreciseTiming(alt, az, jsonPath, ra_acqtime, dec_acqtime);
+        
+        if (!dateObsSuccess || !acqTimeSuccess) continue;
+        
+        // Calculate elapsed time
+        QFile jsonFile(jsonPath);
+        jsonFile.open(QIODevice::ReadOnly);
+        QJsonDocument doc = QJsonDocument::fromJson(jsonFile.readAll());
+        qint64 acqTime = doc.object()["acqTime"].toVariant().toLongLong();
+        QDateTime currentTime = convertAcqTimeToUTC(acqTime);
+        
+        double minutesElapsed = startTime.msecsTo(currentTime) / 60000.0;
+        
+        // Calculate drift from first image
+        if (i == 0) {
+            firstRA_DateObs = ra_dateobs;
+            firstDec_DateObs = dec_dateobs;
+            firstRA_AcqTime = ra_acqtime;
+            firstDec_AcqTime = dec_acqtime;
+        }
+        
+        double raDrift_DateObs = ra_dateobs - firstRA_DateObs;
+        double decDrift_DateObs = dec_dateobs - firstDec_DateObs;
+        double raDrift_AcqTime = ra_acqtime - firstRA_AcqTime;
+        double decDrift_AcqTime = dec_acqtime - firstDec_AcqTime;
+        
+        // Display results
+        logMessage(QString("%1 | DATE-OBS  | %2 | %3 | %4 | %5 | %6")
+                  .arg(baseName, -10)
+                  .arg(minutesElapsed, 7, 'f', 2)
+                  .arg(ra_dateobs, 12, 'f', 6)
+                  .arg(raDrift_DateObs, 8, 'f', 4)
+                  .arg(dec_dateobs, 13, 'f', 6)
+                  .arg(decDrift_DateObs, 8, 'f', 4), "orange");
+        
+        logMessage(QString("%1 | acqTime   | %2 | %3 | %4 | %5 | %6")
+                  .arg(baseName, -10)
+                  .arg(minutesElapsed, 7, 'f', 2)
+                  .arg(ra_acqtime, 12, 'f', 6)
+                  .arg(raDrift_AcqTime, 8, 'f', 4)
+                  .arg(dec_acqtime, 13, 'f', 6)
+                  .arg(decDrift_AcqTime, 8, 'f', 4), "green");
+        
+        logMessage("", "gray");
+    }
+    
+    logMessage("=== DRIFT COMPARISON COMPLETE ===", "blue");
+    logMessage("The acqTime method should show significantly less drift.", "green");
+}
+
+void StellinaProcessor::updateProcessingToDynamicOffset() {
+    if (m_sourceDirectory.isEmpty()) {
+        logMessage("Please select source directory first", "red");
+        return;
+    }
+    
+    // Initialize session timing
+    resetSessionTiming();
+    if (!initializeSessionTiming(m_sourceDirectory)) {
+        logMessage("Failed to initialize session timing for processing", "red");
+        return;
+    }
+    
+    logMessage("=== PROCESSING WITH DYNAMIC OFFSET acqTime ===", "blue");
+    
+    // Process all images with precise timing
+    for (auto &imageData : m_stellinaImageData) {
+        if (imageData.hasValidCoordinates && !imageData.originalJsonPath.isEmpty()) {
+            
+            // Use precise acqTime-based conversion with dynamic offset
+            double preciseRA, preciseDec;
+            bool success = convertAltAzToRaDecWithPreciseTiming(
+                imageData.altitude, 
+                imageData.azimuth, 
+                imageData.originalJsonPath, 
+                preciseRA, 
+                preciseDec
+            );
+            
+            if (success) {
+                imageData.calculatedRA = preciseRA;
+                imageData.calculatedDec = preciseDec;
+                imageData.hasCalculatedCoords = true;
+                
+                if (m_debugMode) {
+                    logMessage(QString("Image %1: Precise RA=%.6f°, Dec=%.6f°")
+                              .arg(QFileInfo(imageData.originalFitsPath).baseName())
+                              .arg(preciseRA, 0, 'f', 6)
+                              .arg(preciseDec, 0, 'f', 6), "green");
+                }
+            }
+        }
+    }
+}
