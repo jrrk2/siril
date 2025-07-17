@@ -237,14 +237,6 @@ private slots:
     void onClearLog();
     void onProcessingModeChanged();
     void onRefreshDarkFrames();
-//    void onStackingParametersChanged();
-//    void onPreviewStacking();
-    
-    // Siril connection slots
-    void onSirilConnected();
-    void onSirilDisconnected();
-    void onSirilCommandExecuted(const QString &command, bool success);
-    void onSirilError(const QString &error);
     
     // Processing slots
     void onProcessingTimer();

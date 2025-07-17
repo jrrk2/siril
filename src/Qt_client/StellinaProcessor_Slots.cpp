@@ -230,28 +230,6 @@ void StellinaProcessor::onRefreshDarkFrames() {
         scanDarkFrames();
     }
 }
-    
-// Siril Event Handlers
-void StellinaProcessor::onSirilConnected() {
-    logMessage("Connected to Siril successfully!", "green");
-    updateUI();
-}
-
-void StellinaProcessor::onSirilDisconnected() {
-    logMessage("Disconnected from Siril.", "orange");
-    updateUI();
-}
-
-void StellinaProcessor::onSirilCommandExecuted(const QString &command, bool success) {
-    if (m_debugMode) {
-        QString status = success ? "SUCCESS" : "FAILED";
-        logMessage(QString("Command [%1]: %2").arg(status).arg(command), success ? "gray" : "red");
-    }
-}
-
-void StellinaProcessor::onSirilError(const QString &error) {
-    logMessage(QString("Siril error: %1").arg(error), "red");
-}
 
 void StellinaProcessor::onProcessingTimer() {
     processNextImage();

@@ -53,7 +53,7 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
     , m_testTiltButton(nullptr)
     , m_tiltStatusLabel(nullptr)
 {
-    setWindowTitle("Enhanced Stellina Processor for Siril - v2.0");
+    setWindowTitle("Enhanced Stellina Processor");
     setMinimumSize(1000, 800);
     // Setup timer
     m_processingTimer->setSingleShot(false);
@@ -67,7 +67,7 @@ StellinaProcessor::StellinaProcessor(QWidget *parent)
     testLibnovaConversion();
     initializeWCSStacker();
 
-    logMessage("Enhanced Stellina Processor started. Connect to Siril and select processing mode.", "blue");
+    logMessage("Enhanced Stellina Processor started.", "blue");
     
     // Scan for dark frames if directory is set
     if (!m_darkDirectory.isEmpty()) {
@@ -1256,20 +1256,6 @@ bool StellinaProcessor::performAstrometricStacking() {
     m_subTaskProgressBar->setValue(4);
     m_subTaskProgressBar->setVisible(false);
     
-    return true;
-}
-
-bool StellinaProcessor::registerImages(const QStringList &imageList, const QString &referenceImage) {
-    Q_UNUSED(imageList)
-    Q_UNUSED(referenceImage)
-    // Implementation would use Siril's registration commands
-    return true;
-}
-
-bool StellinaProcessor::stackRegisteredImages(const QStringList &registeredImages, const QString &outputStack) {
-    Q_UNUSED(registeredImages)
-    Q_UNUSED(outputStack)
-    // Implementation would use Siril's stacking commands
     return true;
 }
 

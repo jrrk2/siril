@@ -12,10 +12,10 @@ int main(int argc, char *argv[])
     
     // Set application properties
     app.setApplicationName("Stellina Processor");
-    app.setApplicationDisplayName("Stellina Processor for Siril");
+    app.setApplicationDisplayName("Stellina Processor");
     app.setApplicationVersion("1.0.0");
     app.setOrganizationName("StellinaTools");
-    app.setOrganizationDomain("stellinatools.org");
+    app.setOrganizationDomain("openstellina.uk");
     
     // Set a modern style
     app.setStyle(QStyleFactory::create("Fusion"));

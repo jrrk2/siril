@@ -45,8 +45,6 @@ void StellinaProcessor::initializeWCSStacker() {
             this, &StellinaProcessor::onWCSStatusUpdated);
     connect(m_wcsStacker, &WCSAstrometricStacker::stackingComplete,
             this, &StellinaProcessor::onWCSStackingComplete);
-    connect(m_wcsStacker, &WCSAstrometricStacker::errorOccurred,
-            this, &StellinaProcessor::onSirilError); // Reuse existing error handler
 }
 
 void StellinaProcessor::setupWCSStackingUI() {
@@ -396,25 +394,6 @@ bool StellinaProcessor::performAstrometricStackingEnhanced() {
         return false;
     }
     
-    // Ask user which stacking method to use
-    QMessageBox msgBox;
-    msgBox.setWindowTitle("Choose Stacking Method");
-    msgBox.setText("Choose the stacking method for astrometric processing:");
-    msgBox.setInformativeText("WCS-based stacking provides better precision but requires "
-                             "plate-solved images with WCS headers.");
-    
-    QPushButton *wcsButton = msgBox.addButton("WCS Astrometric Stacking (Recommended)", 
-                                             QMessageBox::AcceptRole);
-    QPushButton *sirilButton = msgBox.addButton("Traditional Siril Stacking", 
-                                               QMessageBox::ActionRole);
-    QPushButton *cancelButton = msgBox.addButton(QMessageBox::Cancel);
-    
-    msgBox.exec();
-    
-    if (msgBox.clickedButton() == cancelButton) {
-        return false;
-    } else if (msgBox.clickedButton() == wcsButton) {
-        // Use WCS stacking
         logMessage("Using WCS-based astrometric stacking", "blue");
         
         // Set up WCS stacker with current plate-solved files
@@ -459,11 +438,6 @@ bool StellinaProcessor::performAstrometricStackingEnhanced() {
             return false;
         }
         
-    } else {
-        // Use traditional Siril stacking
-        logMessage("Using traditional Siril stacking", "blue");
-        return performAstrometricStacking(); // Call your existing function
-    }
 }
 
 void StellinaProcessor::addWCSMenuItems() {
