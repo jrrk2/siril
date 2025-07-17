@@ -2318,7 +2318,7 @@ void StellinaProcessor::diagnoseSiderealTimeIssues() {
 }
 
 double StellinaProcessor::calculateLST_HighPrecision(double JD, double longitude) {
-    return CoordinateUtils::localSiderealTime(longitude, JD);
+    return 12.0 / M_PI * CoordinateUtils::localSiderealTime(longitude, JD);
 }
 
 // DIAGNOSTIC: Test the LST calculation accuracy
@@ -3559,8 +3559,8 @@ bool StellinaProcessor::convertAltAzToRaDecExt(double alt, double az, const QStr
     // Convert current epoch to J2000
     auto [ra2000, dec2000] = CoordinateUtils::jNowToJ2000(raNow, decNow);
 
-    ra = ra2000;
-    dec = dec2000;
+    ra = raNow; // FIXME!
+    dec = decNow;
     ha = haNow;
     
     // Apply time-dependent drift correction if enabled
@@ -3664,7 +3664,7 @@ bool StellinaProcessor::convertRaDecToAltAzExt(double ra, double dec, const QStr
     lst = calculateLST_HighPrecision(jd, observer_lon);
     // Calculate RA/Dec from Alt/Az using the CoordinateUtils class
     // Convert horizontal to equatorial
-    auto [altNow, azNow, haNow] = CoordinateUtils::raDecToAltAz(ra, dec, observer_lat, observer_lon, lst);
+    auto [altNow, azNow, haNow] = CoordinateUtils::raDecToAltAz(ra/15.0, dec, observer_lat, observer_lon, lst);
 
     alt = altNow;
     az = azNow;

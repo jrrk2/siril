@@ -45,9 +45,13 @@ public:
     static std::tuple<double, double, double, double, double, double, double>
     calculateRaDec(int year, int month, int day, int hour, int minute, int second,
                    double alt, double az, double latitude, double longitude);
-    
+
+    static void blindAltAzToEquatorial(double alt, double az, double latitude, double lst,
+				double& ra, double& dec, double& ha);
+  
     // Atmospheric refraction correction
     static double correctRefraction(double apparentAlt);
+    static double calculateAtmosphericRefraction(double apparent_alt_degrees);
     
     // Formatting and parsing functions
     static QString formatRaAsHMS(double ra);

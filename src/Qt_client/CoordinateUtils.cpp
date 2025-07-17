@@ -281,6 +281,82 @@ std::tuple<double, double, double> CoordinateUtils::raDecToAltAz(
     return std::make_tuple(alt, az, ha);
 }
 
+
+double CoordinateUtils::calculateAtmosphericRefraction(double apparent_alt_degrees) {
+    // Bennett's refraction formula (1982) - more accurate than simple formulas
+    // Returns refraction in degrees
+    
+    if (apparent_alt_degrees < -1.0) {
+        return 0.0;  // Below horizon
+    }
+    
+    double refraction_arcsec;
+    
+    if (apparent_alt_degrees > 15.0) {
+        // For elevations above 15°
+        double alt_rad = apparent_alt_degrees * M_PI / 180.0;
+        double tan_alt = tan(alt_rad);
+        refraction_arcsec = 58.1 / tan_alt - 0.07 / (tan_alt * tan_alt * tan_alt) + 
+                           0.000086 / (tan_alt * tan_alt * tan_alt * tan_alt * tan_alt);
+    } else {
+        // For low elevations (more complex formula needed)
+        double h = apparent_alt_degrees;
+        refraction_arcsec = 1735.0 + h * (-518.2 + h * (103.4 + h * (-12.79 + h * 0.711)));
+        refraction_arcsec = refraction_arcsec / 3600.0;  // Convert to degrees
+        return refraction_arcsec;
+    }
+    
+    return refraction_arcsec / 3600.0;  // Convert arcseconds to degrees
+}
+
+void CoordinateUtils::blindAltAzToEquatorial(double alt, double az, double latitude, double lst,
+                                           double& ra, double& dec, double& ha) {
+    // Apply atmospheric refraction correction first
+    double true_alt = alt - calculateAtmosphericRefraction(alt);
+    
+    // Convert to radians (NO azimuth conversion needed - mount reports correct values)
+    double alt_rad = true_alt * M_PI / 180.0;
+    double az_rad = az * M_PI / 180.0;
+    double lat_rad = latitude * M_PI / 180.0;
+    
+    // Calculate declination using spherical law of cosines
+    double sin_dec = sin(alt_rad) * sin(lat_rad) + 
+                     cos(alt_rad) * cos(lat_rad) * cos(az_rad);
+    
+    // Clamp to avoid numerical errors
+    sin_dec = std::max(-1.0, std::min(1.0, sin_dec));
+    dec = asin(sin_dec);
+    
+    // Calculate hour angle
+    double cos_ha = (sin(alt_rad) - sin(lat_rad) * sin(dec)) / 
+                    (cos(lat_rad) * cos(dec));
+    
+    // Clamp to avoid numerical errors
+    cos_ha = std::max(-1.0, std::min(1.0, cos_ha));
+    double ha_rad = acos(cos_ha);
+    
+    // FIXED: Reverse the hour angle sign logic
+    if (sin(az_rad) > 0) {  // Azimuth > 180° (western sky)
+        ha_rad = -ha_rad;   // NEGATIVE HA (setting) - CORRECTED
+    } else {                // Azimuth < 180° (eastern sky)
+        ha_rad = ha_rad;    // POSITIVE HA (rising) - CORRECTED
+    }
+    
+    // Convert Hour Angle to hours
+    ha = ha_rad * 12.0 / M_PI;
+    
+    // Calculate Right Ascension using fundamental relation: RA = LST - HA
+    double ra_hours = lst - ha;
+    
+    // Normalize RA to [0, 24) hours
+    while (ra_hours < 0) ra_hours += 24.0;
+    while (ra_hours >= 24.0) ra_hours -= 24.0;
+    
+    // Convert to degrees
+    ra = ra_hours * 15.0;
+    dec = dec * 180.0 / M_PI;
+}
+
 std::tuple<double, double, double> CoordinateUtils::altAzToRaDec(
     double alt, double az, double latitude, double longitude, double lst)
 {
@@ -288,8 +364,12 @@ std::tuple<double, double, double> CoordinateUtils::altAzToRaDec(
     double trueAlt = alt - CoordinateUtilsJSStyle::calcRefractionFromTrue(alt * RAD_TO_DEG);
     
     double ra, dec, ha;
-    CoordinateUtilsJSStyle::getEquatTrig(trueAlt, az, lst, latitude, ra, dec, ha);
+    //    CoordinateUtilsJSStyle::getEquatTrig(trueAlt, az, lst, latitude, ra, dec, ha);
     
+    blindAltAzToEquatorial(trueAlt, az, latitude, lst, ra, dec, ha);
+      
+    qDebug() << "blind eq" << ra << " " << dec << " " << ha;
+
     return std::make_tuple(ra, dec, ha);
 }
 
@@ -320,6 +400,8 @@ std::tuple<double, double> CoordinateUtils::jNowToJ2000(double raNow, double dec
     double deltaRA, deltaDec;
     CoordinateUtilsJSStyle::calcPrecessionRigorous(raNow, decNow, julianYear, 2000.0 - julianYear,
                                                   deltaRA, deltaDec);
+    
+    qDebug() << "delta J2000" << deltaRA << " " << deltaDec;
     
     double ra2000 = CoordinateUtilsJSStyle::validRev(raNow + deltaRA);
     double dec2000 = CoordinateUtilsJSStyle::validDec(decNow + deltaDec);

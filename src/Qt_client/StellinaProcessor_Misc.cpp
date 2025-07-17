@@ -505,6 +505,8 @@ bool StellinaProcessor::writeStellinaMetadataWithCoordinates(const QString &fits
     if (imageData.hasValidCoordinates && !imageData.dateObs.isEmpty()) {
       double obslat, obslong, jd, lst, ha;
       if (convertAltAzToRaDecExt(imageData.altitude, imageData.azimuth, imageData.dateObs, ra, dec, obslat, obslong, jd, lst, ha)) {
+          qDebug() << "converted eq" << ra << " " << dec << " " << ha;
+
 	    if (fits_write_key(fptr, TDOUBLE, "OBSLAT", &obslat, "Observer latitude for coordinate conversion", &status)) {
                     logMessage("Warning: Could not write observer latitude", "orange");
                     status = 0;

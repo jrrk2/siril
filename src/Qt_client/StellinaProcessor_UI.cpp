@@ -770,6 +770,8 @@ void StellinaProcessor::onLoadImageData() {
     
     // If the image has calculated coordinates, show them for comparison
     if (firstImage.hasCalculatedCoords) {
+	m_debugRASpin->setValue(firstImage.calculatedRA);
+	m_debugDECSpin->setValue(firstImage.calculatedDec);
         debugLog(QString("  Has pre-calculated coordinates:"));
         debugLog(QString("    RA:  %1°").arg(firstImage.calculatedRA, 0, 'f', 6));
         debugLog(QString("    Dec: %1°").arg(firstImage.calculatedDec, 0, 'f', 6));
